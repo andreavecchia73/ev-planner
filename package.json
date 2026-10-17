@@ -1,0 +1,10 @@
+{
+  "name": "ev-planner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pianificatore personale di viaggi elettrici con soste di ricarica",
+  "scripts": {
+    "test": "node --test planner.test.mjs"
+  }
+}
