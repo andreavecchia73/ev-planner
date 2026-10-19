@@ -233,3 +233,19 @@ export function zoomForRadius(radiusKm, lat, mapWidthPx) {
   const zoom = Math.log2((156543.03392 * Math.cos(toRad(lat))) / metersPerPixel);
   return Math.min(18, Math.max(10, zoom));
 }
+
+// Rumbo in gradi (0 = nord, in senso orario) dal punto a al punto b.
+export function bearingDeg(a, b) {
+  const φ1 = toRad(a.lat);
+  const φ2 = toRad(b.lat);
+  const Δλ = toRad(b.lon - a.lon);
+  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+// Avvicina un angolo al target lungo il percorso più breve (k = frazione di passo, 0..1).
+export function smoothAngle(current, target, k) {
+  const delta = ((((target - current) % 360) + 540) % 360) - 180;
+  return (((current + delta * k) % 360) + 360) % 360;
+}

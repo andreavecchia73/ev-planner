@@ -130,6 +130,7 @@ dd { margin: 0; font-weight: 600; }
 
 /* Durante la guida la mappa occupa tutto lo schermo, il pannello resta in basso */
 body.navigating #map {
+  transition: transform 0.4s linear; /* rotazione morbida tra un fix GPS e l'altro */
   position: fixed !important; /* Leaflet imposta position: relative inline */
   inset: 0;
   width: 100%;
@@ -142,5 +143,14 @@ body.navigating #map {
 .nav-buttons button { width: 100%; }
 #stopNav { background: var(--error); }
 #map { margin-bottom: 0; }
+
+/* Freccia di posizione: sempre rivolta verso la direzione di marcia, perché la mappa ruota */
+#nav-arrow {
+  position: fixed;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 999;
+  pointer-events: none;
+}
 
 [hidden] { display: none !important; }

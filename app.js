@@ -6,6 +6,9 @@ import {
   nextAhead,
   reachRadiusKm,
   zoomForRadius,
+  haversineKm,
+  bearingDeg,
+  smoothAngle,
 } from './planner.js';
 
 const STORAGE_KEY = 'ev-planner-settings';
@@ -25,6 +28,8 @@ const DEFAULTS = {
   avgKmh: 100,
 };
 const ANNOUNCE_KM = 0.3; // annuncio vocale quando la manovra è a 300 m
+const ZOOM_HYSTERESIS = 0.75; // lo zoom cambia solo se la scala ideale si discosta di questo valore
+const MIN_HEADING_KM = 0.015; // sotto 15 m il rumore del GPS non dice nulla sulla direzione
 const RECALC_COOLDOWN_MS = 60000; // evita ricalcoli ripetuti mentre la carica resta sotto la scorta
 
 const $ = (id) => document.getElementById(id);
@@ -133,7 +138,7 @@ async function planRoute(from, to, form, startPct, { nearestFirst = false } = {}
 }
 
 // Mappa
-const map = L.map('map', { zoomSnap: 0 }).setView([45, 9], 6); // zoom continuo per la vista di guida
+const map = L.map('map').setView([45, 9], 6);
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '© OpenStreetMap',
 }).addTo(map);
@@ -284,12 +289,19 @@ function startNavigation() {
     speedKmh: Number(trip.form.avgKmh),
     speedMs: null,
     dragging: false, // lo slider non viene sovrascritto mentre lo trascini
+    heading: 0, // rotta in gradi, 0 = nord
+    prevFix: null,
+    panelH: 0,
   };
   $('navPct').value = Math.round(trip.startPct);
   $('navPctOut').textContent = `${Math.round(trip.startPct)}%`;
   $('nav').hidden = false;
   document.body.classList.add('navigating');
-  map.invalidateSize();
+  // controlli Leaflet rimossi in guida: ruoterebbero con la mappa
+  map.zoomControl?.remove();
+  map.attributionControl?.remove();
+  map.dragging.disable();
+  layoutMap();
   setNavWarn('In attesa del segnale GPS…');
   nav.watchId = navigator.geolocation.watchPosition(onFix, onGpsError, {
     enableHighAccuracy: true,
@@ -313,13 +325,11 @@ function onFix(pos) {
   else if (nav.km !== null && loc.km > nav.km) nav.soc -= pctUsed(loc.km - nav.km);
   nav.km = loc.km;
 
-  if (!nav.marker) {
-    nav.marker = L.circleMarker([fix.lat, fix.lon], { radius: 8, color: '#1a73e8', fillOpacity: 1 }).addTo(map);
-  } else {
-    nav.marker.setLatLng([fix.lat, fix.lon]);
-  }
-  $('nav-gps').textContent = `Precisione GPS ±${Math.round(pos.coords.accuracy)} m`;
-  followMap(fix, pos.coords.speed);
+  updateHeading(fix, pos);
+  $('nav-gps').textContent = `Precisione GPS ±${Math.round(pos.coords.accuracy)} m · © OpenStreetMap`;
+  if (nav.follow) followMap(fix, pos.coords.speed);
+  else placeMarker(fix);
+  if ($('nav').offsetHeight !== nav.panelH) layoutMap(); // il pannello cambia altezza: la freccia si riposiziona
   refresh();
 }
 
@@ -430,27 +440,99 @@ async function recalculate({ nearestFirst = false } = {}) {
   }
 }
 
-// Vista 2D centrata sulla posizione. Lo zoom mostra l'area raggiungibile in 5 minuti alla velocità attuale.
+// Direzione di marcia: dal GPS quando ci si muove, altrimenti dal rumore tra due posizioni.
+// La rotta viene attenuata per evitare che la mappa ruoti a scatti.
+function updateHeading(fix, pos) {
+  if (!nav.prevFix) {
+    nav.prevFix = fix;
+    return;
+  }
+  const moved = haversineKm(nav.prevFix, fix);
+  const gpsHeading = pos.coords.heading;
+  let target = null;
+  if (gpsHeading != null && !Number.isNaN(gpsHeading) && (pos.coords.speed ?? 0) > 1.5) {
+    target = gpsHeading;
+  } else if (moved > MIN_HEADING_KM) {
+    target = bearingDeg(nav.prevFix, fix);
+  }
+  if (target !== null) nav.heading = smoothAngle(nav.heading, target, 0.35);
+  if (moved > MIN_HEADING_KM) nav.prevFix = fix;
+}
+
+function placeMarker(fix) {
+  if (!nav.marker) {
+    nav.marker = L.circleMarker([fix.lat, fix.lon], { radius: 8, color: '#1a73e8', fillOpacity: 1 }).addTo(map);
+  } else {
+    nav.marker.setLatLng([fix.lat, fix.lon]);
+  }
+}
+
+// Vista di guida: il contenitore della mappa è più grande dello schermo e ruota attorno alla freccia,
+// fissa al centro dell'area sopra il pannello. Così la rotazione non lascia angoli vuoti.
+function arrowY() {
+  return (window.innerHeight - $('nav').offsetHeight) / 2;
+}
+
+function layoutMap() {
+  if (!nav) return;
+  const el = map.getContainer();
+  const arrow = $('nav-arrow');
+  nav.panelH = $('nav').offsetHeight;
+  if (nav.follow) {
+    const size = Math.ceil(2 * Math.hypot(window.innerWidth / 2, window.innerHeight * 0.75));
+    el.style.width = `${size}px`;
+    el.style.height = `${size}px`;
+    el.style.left = `${window.innerWidth / 2 - size / 2}px`;
+    el.style.top = `${arrowY() - size / 2}px`;
+    arrow.style.top = `${arrowY()}px`;
+  } else {
+    for (const prop of ['width', 'height', 'left', 'top', 'transform']) el.style[prop] = '';
+  }
+  arrow.hidden = !nav.follow;
+  map.invalidateSize({ pan: false });
+}
+
+// Centro sulla posizione e zoom che mostra l'area raggiungibile in 5 minuti alla velocità attuale.
+// Lo zoom cambia a livelli interi e solo oltre una soglia: niente cambi a ogni fix, niente lampeggi.
 function followMap(fix, speedMs) {
   if (!nav) return;
   nav.speedMs = speedMs;
   nav.speedKmh = speedMs != null && speedMs >= 0 ? speedMs * 3.6 : Number(trip.form.avgKmh);
-  if (!nav.follow) return;
 
-  const target = zoomForRadius(reachRadiusKm(nav.speedKmh), fix.lat, map.getSize().x);
-  // attenua il rumore del GPS sullo zoom
-  nav.zoom = nav.zoom === null ? target : nav.zoom * 0.8 + target * 0.2;
-
-  // il centro viene spostato a sud della posizione, così resta visibile sopra il pannello
-  const panelHalf = $('nav').offsetHeight / 2;
-  const pixel = map.project([fix.lat, fix.lon], nav.zoom).add([0, panelHalf]);
-  map.setView(map.unproject(pixel, nav.zoom), nav.zoom, { animate: false });
+  const target = zoomForRadius(reachRadiusKm(nav.speedKmh), fix.lat, window.innerWidth);
+  let animate = false;
+  if (nav.zoom === null) {
+    nav.zoom = Math.round(target);
+  } else if (Math.abs(target - nav.zoom) >= ZOOM_HYSTERESIS) {
+    const next = Math.round(target);
+    animate = next !== nav.zoom;
+    nav.zoom = next;
+  }
+  map.setView(fix, nav.zoom, { animate });
+  map.getContainer().style.transform = `rotate(${-nav.heading}deg)`;
 }
 
-function recenter() {
+function toggleFollow() {
   if (!nav) return;
-  nav.follow = true;
-  if (nav.lastFix) followMap(nav.lastFix, nav.speedMs);
+  nav.follow = !nav.follow;
+  if (nav.follow) {
+    map.dragging.disable();
+    if (nav.marker) {
+      nav.marker.remove();
+      nav.marker = null;
+    }
+    nav.zoom = null;
+    layoutMap();
+    if (nav.lastFix) followMap(nav.lastFix, nav.speedMs);
+  } else {
+    map.dragging.enable();
+    layoutMap();
+    if (nav.lastFix) {
+      map.setView(nav.lastFix, map.getZoom(), { animate: false });
+      placeMarker(nav.lastFix);
+    }
+  }
+  $('recenter').textContent = nav.follow ? 'Vista libera' : 'Segui';
 }
 
 function stopNavigation() {
@@ -465,7 +547,12 @@ function stopNavigation() {
   }
   nav = null;
   $('nav').hidden = true;
+  $('nav-arrow').hidden = true;
   document.body.classList.remove('navigating');
+  map.dragging.enable();
+  map.zoomControl?.addTo(map);
+  map.attributionControl?.addTo(map);
+  for (const prop of ['width', 'height', 'left', 'top', 'transform']) map.getContainer().style[prop] = '';
   map.invalidateSize();
   if (trip) renderMap(trip.points, trip.result.stops);
 }
@@ -476,10 +563,8 @@ $('startNav').addEventListener('click', startNavigation);
 $('navPct').addEventListener('input', onSocInput);
 $('recalc').addEventListener('click', () => recalculate());
 $('stopNav').addEventListener('click', stopNavigation);
-$('recenter').addEventListener('click', recenter);
-map.on('dragstart', () => {
-  if (nav) nav.follow = false;
-});
+$('recenter').addEventListener('click', toggleFollow);
+window.addEventListener('resize', () => layoutMap());
 $('navPct').addEventListener('pointerdown', () => {
   if (nav) nav.dragging = true;
 });

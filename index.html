@@ -68,12 +68,18 @@
       <input id="navPct" type="range" min="0" max="100" step="1" />
     </label>
     <div class="nav-buttons">
-      <button id="recenter" type="button">Centra</button>
+      <button id="recenter" type="button">Vista libera</button>
       <button id="recalc" type="button">Ricalcola da qui</button>
       <button id="stopNav" type="button">Termina</button>
     </div>
     <p id="nav-gps" class="attribution"></p>
   </section>
+
+  <div id="nav-arrow" hidden>
+    <svg viewBox="0 0 40 40" width="44" height="44" aria-hidden="true">
+      <path d="M20 3 L35 36 L20 28 L5 36 Z" fill="#1a73e8" stroke="#fff" stroke-width="3" stroke-linejoin="round" />
+    </svg>
+  </div>
 
   <script src="vendor/leaflet/leaflet.js"></script>
   <script type="module" src="app.js"></script>

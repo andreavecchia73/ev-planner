@@ -11,6 +11,8 @@ import {
   nextAhead,
   reachRadiusKm,
   zoomForRadius,
+  bearingDeg,
+  smoothAngle,
 } from './planner.js';
 
 // Percorso lungo un meridiano con un punto ogni km (1 grado di latitudine ≈ 111,195 km).
@@ -138,4 +140,13 @@ test('vista di navigazione: raggio a 5 minuti e zoom che lo mostra', () => {
   assert.ok(Math.abs(z1 - 11.37) < 0.05, `zoom ${z1}`);
   // velocità dimezzata: raggio dimezzato, zoom di una unità in più
   assert.ok(Math.abs(z2 - z1 - 1) < 0.01);
+});
+
+test('direzione di marcia: rumore e rotazione angolare', () => {
+  assert.ok(Math.abs(bearingDeg({ lat: 45, lon: 9 }, { lat: 46, lon: 9 })) < 0.01);
+  assert.ok(Math.abs(bearingDeg({ lat: 45, lon: 9 }, { lat: 45, lon: 10 }) - 90) < 1);
+  assert.ok(Math.abs(bearingDeg({ lat: 45, lon: 9 }, { lat: 44, lon: 9 }) - 180) < 0.01);
+  assert.ok(Math.abs(smoothAngle(350, 10, 0.5) - 0) < 0.01);
+  assert.ok(Math.abs(smoothAngle(10, 350, 0.5) - 0) < 0.01);
+  assert.ok(Math.abs(smoothAngle(90, 180, 0.5) - 135) < 0.01);
 });
