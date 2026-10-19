@@ -9,6 +9,8 @@ import {
   routeSteps,
   locateOnRoute,
   nextAhead,
+  reachRadiusKm,
+  zoomForRadius,
 } from './planner.js';
 
 // Percorso lungo un meridiano con un punto ogni km (1 grado di latitudine ≈ 111,195 km).
@@ -126,4 +128,14 @@ test('prossimo elemento davanti alla posizione', () => {
   assert.equal(nextAhead(items, 0).km, 10);
   assert.equal(nextAhead(items, 10).km, 25);
   assert.equal(nextAhead(items, 40), null);
+});
+
+test('vista di navigazione: raggio a 5 minuti e zoom che lo mostra', () => {
+  assert.ok(Math.abs(reachRadiusKm(100) - 8.33) < 0.01);
+  assert.equal(reachRadiusKm(0), 0.5);
+  const z1 = zoomForRadius(8.33, 45, 400);
+  const z2 = zoomForRadius(4.17, 45, 400);
+  assert.ok(Math.abs(z1 - 11.37) < 0.05, `zoom ${z1}`);
+  // velocità dimezzata: raggio dimezzato, zoom di una unità in più
+  assert.ok(Math.abs(z2 - z1 - 1) < 0.01);
 });

@@ -221,3 +221,15 @@ export function locateOnRoute(points, cum, fix, hint = 0) {
 export function nextAhead(items, km, marginKm = 0.05) {
   return items.find((item) => item.km > km + marginKm) ?? null;
 }
+
+// Raggio (km) di ciò che si raggiunge in `minutes` alla velocità indicata, con un minimo da fermo.
+export function reachRadiusKm(speedKmh, minutes = 5) {
+  return Math.max((speedKmh * minutes) / 60, 0.5);
+}
+
+// Zoom Leaflet che mostra un'area larga 2 × radiusKm, data la larghezza della mappa in pixel.
+export function zoomForRadius(radiusKm, lat, mapWidthPx) {
+  const metersPerPixel = (2 * radiusKm * 1000) / mapWidthPx;
+  const zoom = Math.log2((156543.03392 * Math.cos(toRad(lat))) / metersPerPixel);
+  return Math.min(18, Math.max(10, zoom));
+}
