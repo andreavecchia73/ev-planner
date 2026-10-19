@@ -2,14 +2,21 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   haversineKm,
-  consumptionKwhPerKm,
+  tempFactor,
+  uniformProfile,
+  classifyRoad,
+  buildProfile,
+  makeAltitudeAt,
+  climbEnergyKwh,
+  energyBetween,
+  rangeKm,
   planTrip,
   cumulativeKm,
   describeStep,
   routeSteps,
   locateOnRoute,
   nextAhead,
-  reachRadiusKm,
+  viewRadiusKm,
   zoomForRadius,
   bearingDeg,
   smoothAngle,
@@ -35,18 +42,60 @@ test('haversine: un grado di latitudine vale circa 111,2 km', () => {
   assert.ok(Math.abs(d - 111.2) < 0.1, `got ${d}`);
 });
 
-test('consumo: nessuna correzione in condizioni di riferimento', () => {
-  assert.ok(Math.abs(consumptionKwhPerKm(vehicle, conditions) - 0.18) < 1e-9);
+test('temperatura: nessuna correzione a 20 °C, freddo e caldo aumentano il consumo', () => {
+  assert.equal(tempFactor(20), 1);
+  assert.ok(tempFactor(-5) > 1);
+  assert.ok(tempFactor(35) > 1);
 });
 
-test('consumo: il freddo e l\'autostrada aumentano il consumo', () => {
-  const cold = consumptionKwhPerKm(vehicle, { tempC: -5, avgKmh: 90 });
-  const fast = consumptionKwhPerKm(vehicle, { tempC: 20, avgKmh: 120 });
-  assert.ok(cold > 0.18);
-  assert.ok(fast > 0.18);
+test('tipologia di strada: codici autostrada e superstrada, poi velocità media', () => {
+  assert.equal(classifyRoad({ ref: 'A4', distance: 1000, duration: 40 }), 'motorway');
+  assert.equal(classifyRoad({ ref: 'SS11', distance: 1000, duration: 60 }), 'expressway');
+  assert.equal(classifyRoad({ ref: '', distance: 2000, duration: 100 }), 'expressway'); // 72 km/h senza codice
+  assert.equal(classifyRoad({ ref: '', distance: 1000, duration: 120 }), 'urban'); // 30 km/h senza codice
 });
 
-test('viaggio breve: nessuna sosta, SoC finale calcolato', async () => {
+test('consumo per strada: 22, 18 e 15 kWh/100 km con la stessa lunghezza', () => {
+  const steps = [
+    { ref: 'A4', distance: 10000, duration: 360, maneuver: { type: 'depart', location: [9, 45] } },
+    { ref: 'SS11', distance: 10000, duration: 720, maneuver: { type: 'turn', location: [9, 45.1] } },
+    { ref: '', distance: 10000, duration: 1500, maneuver: { type: 'turn', location: [9, 45.2] } },
+  ];
+  const profile = buildProfile(steps, { totalKm: 30, tempC: 20 });
+  assert.ok(Math.abs(profile[0].kwh - 2.2) < 1e-9);
+  assert.ok(Math.abs(profile[1].kwh - 1.8) < 1e-9);
+  assert.ok(Math.abs(profile[2].kwh - 1.5) < 1e-9);
+});
+
+test('dislivello: salita aumenta il consumo, discesa lo riduce', () => {
+  const up = climbEnergyKwh(100);
+  const down = climbEnergyKwh(-100);
+  assert.ok(up > 0);
+  assert.ok(down < 0);
+  // in salita si spende più di quanto si recupera in discesa, a parità di dislivello
+  assert.ok(Math.abs(up / -down - 1 / (0.85 * 0.6)) < 1e-9);
+  const steps = [{ ref: 'SS11', distance: 10000, duration: 720, maneuver: { type: 'depart', location: [9, 45] } }];
+  const flat = buildProfile(steps, { totalKm: 10, tempC: 20 });
+  const climb = buildProfile(steps, { totalKm: 10, tempC: 20, altitudeAt: makeAltitudeAt([0, 10], [0, 300]) });
+  const descent = buildProfile(steps, { totalKm: 10, tempC: 20, altitudeAt: makeAltitudeAt([0, 10], [300, 0]) });
+  assert.ok(climb[0].kwh > flat[0].kwh);
+  assert.ok(descent[0].kwh < flat[0].kwh);
+  assert.ok(descent[0].kwh >= flat[0].kwh * 0.2); // mai sotto il 20% della tariffa
+});
+
+test('autonomia per tratti: la tariffa cambia lungo il percorso', () => {
+  const profile = [
+    { from: 0, to: 100, kwh: 22, minutes: 60 }, // autostrada 22 kWh/100 km
+    { from: 100, to: 200, kwh: 15, minutes: 120 }, // centro 15 kWh/100 km
+  ];
+  assert.ok(Math.abs(energyBetween(profile, 0, 200) - 37) < 1e-9);
+  // con 22 kWh si percorrono 100 km in autostrada, non di più
+  assert.ok(Math.abs(rangeKm(profile, 0, 22, 200) - 100) < 1e-9);
+  // dopo 100 km il centro consuma 15 kWh/100 km: 15 kWh portano a 100 km
+  assert.ok(Math.abs(rangeKm(profile, 100, 15, 200) - 200) < 1e-9);
+});
+
+test('viaggio breve: nessuna sosta, SoC finale calcolato sul profilo uniforme', async () => {
   const res = await planTrip({
     ...base,
     points: line(100),
@@ -132,13 +181,23 @@ test('prossimo elemento davanti alla posizione', () => {
   assert.equal(nextAhead(items, 40), null);
 });
 
-test('vista di navigazione: raggio a 5 minuti e zoom che lo mostra', () => {
-  assert.ok(Math.abs(reachRadiusKm(100) - 8.33) < 0.01);
-  assert.equal(reachRadiusKm(0), 0.5);
+test('vista di navigazione: 5 minuti sopra i 30 km/h, più dettaglio sotto', () => {
+  assert.ok(Math.abs(viewRadiusKm(100) - 8.33) < 0.01);
+  // continuità a 30 km/h
+  assert.ok(Math.abs(viewRadiusKm(30) - 2.5) < 1e-9);
+  // da fermo il raggio è piccolo, quindi lo zoom è più alto
+  assert.ok(viewRadiusKm(0) < viewRadiusKm(15));
+  assert.ok(viewRadiusKm(15) < viewRadiusKm(30));
+  const zSlow = zoomForRadius(viewRadiusKm(10), 45, 390);
+  const zFast = zoomForRadius(viewRadiusKm(60), 45, 390);
+  assert.ok(zSlow > zFast + 1, `zoom lento ${zSlow} veloce ${zFast}`);
+  assert.ok(zoomForRadius(viewRadiusKm(0), 45, 390) <= 18);
+});
+
+test('zoom: velocità dimezzata, raggio dimezzato, zoom di una unità in più', () => {
   const z1 = zoomForRadius(8.33, 45, 400);
   const z2 = zoomForRadius(4.17, 45, 400);
   assert.ok(Math.abs(z1 - 11.37) < 0.05, `zoom ${z1}`);
-  // velocità dimezzata: raggio dimezzato, zoom di una unità in più
   assert.ok(Math.abs(z2 - z1 - 1) < 0.01);
 });
 
@@ -149,4 +208,9 @@ test('direzione di marcia: rumore e rotazione angolare', () => {
   assert.ok(Math.abs(smoothAngle(350, 10, 0.5) - 0) < 0.01);
   assert.ok(Math.abs(smoothAngle(10, 350, 0.5) - 0) < 0.01);
   assert.ok(Math.abs(smoothAngle(90, 180, 0.5) - 135) < 0.01);
+});
+
+test('profilo uniforme di riserva: energia coerente con Wh/km', () => {
+  const profile = uniformProfile(100, vehicle, conditions);
+  assert.ok(Math.abs(profile[0].kwh - 18) < 1e-9);
 });

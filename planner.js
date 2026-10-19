@@ -1,19 +1,28 @@
 // Logica di pianificazione senza dipendenze di rete.
-// Tutti i parametri arrivano dall'utente (consumo misurato sulla propria auto,
-// capacità batteria, potenza DC massima). Le costanti in MODEL sono euristiche da tarare.
+// Il consumo è un profilo a segmenti lungo il percorso: ogni passo OSRM ha la sua tipologia di strada
+// (autostrada, superstrada, centro abitato) e il suo dislivello. Le costanti in MODEL sono euristiche da tarare.
+
+export const ROAD_RATES = {
+  motorway: 22, // kWh/100 km, autostrada
+  expressway: 18, // kWh/100 km, superstrada
+  urban: 15, // kWh/100 km, centro abitato
+};
 
 export const MODEL = {
   comfortLowC: 20,
   comfortHighC: 25,
   coldPerDegC: 0.01, // +1% consumo per grado sotto i 20 °C
   hotPerDegC: 0.005, // +0,5% consumo per grado sopra i 25 °C
-  highwayKmh: 90,
-  highwayPerKmh: 0.006, // +0,6% consumo per km/h di media sopra i 90 km/h
+  massKg: 1900, // massa del veicolo in marcia, da verificare sulla carta di circolazione
+  drivetrainEfficiency: 0.85, // energia dalla batteria alle ruote in salita
+  regenEfficiency: 0.6, // energia recuperata in discesa
+  minRateFactor: 0.2, // il consumo in discesa non scende sotto il 20% della tariffa di strada
   chargeEfficiency: 0.9, // energia da rete -> batteria
   averageChargeFactor: 0.6, // potenza media sulla sessione rispetto al picco (curva di carica)
 };
 
 const EARTH_RADIUS_KM = 6371;
+const GRAVITY = 9.81;
 const toRad = (deg) => (deg * Math.PI) / 180;
 
 export function haversineKm(a, b) {
@@ -62,21 +71,124 @@ function nearestIndex(points, p) {
   return best;
 }
 
-// Consumo stimato in kWh/km a partire dal consumo misurato in Wh/km.
-export function consumptionKwhPerKm(vehicle, conditions) {
-  const { tempC, avgKmh } = conditions;
+// Fattore di temperatura: freddo e caldo aumentano il consumo.
+export function tempFactor(tempC) {
   let factor = 1;
   if (tempC < MODEL.comfortLowC) factor += (MODEL.comfortLowC - tempC) * MODEL.coldPerDegC;
   else if (tempC > MODEL.comfortHighC) factor += (tempC - MODEL.comfortHighC) * MODEL.hotPerDegC;
-  factor += Math.max(0, avgKmh - MODEL.highwayKmh) * MODEL.highwayPerKmh;
-  return (vehicle.consumptionWhPerKm / 1000) * factor;
+  return factor;
+}
+
+// Energia (kWh) per salire o scendere di climbM metri: in salita si spende, in discesa si recupera in parte.
+export function climbEnergyKwh(climbM, massKg = MODEL.massKg) {
+  const kwh = (massKg * GRAVITY * climbM) / 3.6e6;
+  return climbM > 0 ? kwh / MODEL.drivetrainEfficiency : kwh * MODEL.regenEfficiency;
+}
+
+// Classificazione della strada di un passo OSRM: prima dal codice (A/E autostrada, SS/SP/SR superstrada),
+// poi dalla velocità media del passo. È una stima: strade miste possono essere classificate diversamente.
+export function classifyRoad(step) {
+  const ref = (step.ref ?? '').trim();
+  if (/^[AE]\s?\d/i.test(ref)) return 'motorway';
+  if (/^(SS|SP|SR|RA|SC)\s?\d/i.test(ref)) return 'expressway';
+  const speedKmh = step.duration > 0 ? (step.distance / step.duration) * 3.6 : 0;
+  if (speedKmh >= 85) return 'motorway';
+  if (speedKmh >= 55) return 'expressway';
+  return 'urban';
+}
+
+// Funzione altitudine (m) interpolata da campioni {km, alt} lungo il percorso.
+export function makeAltitudeAt(sampleKm, sampleAlt) {
+  return (km) => {
+    if (km <= sampleKm[0]) return sampleAlt[0];
+    const last = sampleKm.length - 1;
+    if (km >= sampleKm[last]) return sampleAlt[last];
+    let i = 1;
+    while (sampleKm[i] < km) i++;
+    const span = sampleKm[i] - sampleKm[i - 1];
+    const t = span === 0 ? 0 : (km - sampleKm[i - 1]) / span;
+    return sampleAlt[i - 1] + t * (sampleAlt[i] - sampleAlt[i - 1]);
+  };
+}
+
+// Profilo di consumo e tempo: un segmento per passo OSRM, con energia totale (kWh) e minuti.
+// Le distanze dei passi vengono riscalate sulla lunghezza reale del tracciato.
+export function buildProfile(steps, { totalKm, tempC, altitudeAt = null, massKg = MODEL.massKg }) {
+  const sumKm = steps.reduce((sum, step) => sum + step.distance / 1000, 0);
+  const scale = sumKm > 0 ? totalKm / sumKm : 1;
+  const factor = tempFactor(tempC);
+  const segments = [];
+  let km = 0;
+  for (const step of steps) {
+    const lengthKm = (step.distance / 1000) * scale;
+    if (lengthKm <= 0) continue;
+    const from = km;
+    const to = km + lengthKm;
+    const base = lengthKm * (ROAD_RATES[classifyRoad(step)] / 100) * factor;
+    let kwh = base;
+    if (altitudeAt) {
+      kwh += climbEnergyKwh(altitudeAt(to) - altitudeAt(from), massKg);
+      kwh = Math.max(kwh, base * MODEL.minRateFactor);
+    }
+    segments.push({ from, to, kwh, minutes: step.duration / 60 });
+    km = to;
+  }
+  return segments;
+}
+
+// Profilo uniforme per tratti senza dati di strada: consumo medio dal valore Wh/km.
+export function uniformProfile(totalKm, vehicle, conditions) {
+  const kwh = totalKm * (vehicle.consumptionWhPerKm / 1000) * tempFactor(conditions.tempC);
+  return [{ from: 0, to: totalKm, kwh, minutes: (totalKm / conditions.avgKmh) * 60 }];
+}
+
+// Energia (kWh) tra due km del percorso.
+export function energyBetween(profile, a, b) {
+  let kwh = 0;
+  for (const s of profile) {
+    const overlap = Math.min(b, s.to) - Math.max(a, s.from);
+    if (overlap > 0) kwh += (overlap / (s.to - s.from)) * s.kwh;
+  }
+  return kwh;
+}
+
+// Minuti di guida tra due km del percorso.
+export function minutesBetween(profile, a, b) {
+  let minutes = 0;
+  for (const s of profile) {
+    const overlap = Math.min(b, s.to) - Math.max(a, s.from);
+    if (overlap > 0) minutes += (overlap / (s.to - s.from)) * s.minutes;
+  }
+  return minutes;
+}
+
+// Km raggiungibili partendo da fromKm con l'energia disponibile, seguendo il consumo di ogni tratto.
+export function rangeKm(profile, fromKm, budgetKwh, totalKm) {
+  let left = budgetKwh;
+  let km = fromKm;
+  for (const s of profile) {
+    if (s.to <= km) continue;
+    const start = Math.max(s.from, km);
+    const rate = s.kwh / (s.to - s.from);
+    if (rate <= 0) {
+      km = s.to;
+      continue;
+    }
+    const availableKwh = (s.to - start) * rate;
+    if (availableKwh >= left) return start + left / rate;
+    left -= availableKwh;
+    km = s.to;
+  }
+  return totalKm;
 }
 
 // Pianifica il viaggio con soste di ricarica greedy: a ogni sosta sceglie la colonnina
 // più potente raggiungibile con la riserva, poi ricarica fino a chargeToPct.
+// profile: segmenti da buildProfile; se assente il consumo è uniforme (vehicle.consumptionWhPerKm).
 // findChargers(point, radiusKm) deve restituire [{ lat, lon, name, kw }].
 export async function planTrip({
   points,
+  profile = null,
   vehicle,
   conditions,
   startPct,
@@ -89,21 +201,22 @@ export async function planTrip({
 }) {
   const cum = cumulativeKm(points);
   const totalKm = cum[cum.length - 1];
-  const cons = consumptionKwhPerKm(vehicle, conditions);
-  const kmFor = (fromPct, floorPct) =>
-    Math.max(0, ((fromPct - floorPct) / 100) * vehicle.batteryKwh) / cons;
-  const pctUsed = (km) => ((km * cons) / vehicle.batteryKwh) * 100;
+  const segs = profile ?? uniformProfile(totalKm, vehicle, conditions);
+  const battery = vehicle.batteryKwh;
+  const pctBetween = (a, b) => (energyBetween(segs, a, b) / battery) * 100;
+  const reachFrom = (pos, floorPct, fromPct) =>
+    rangeKm(segs, pos, (Math.max(0, fromPct - floorPct) / 100) * battery, totalKm);
 
   const stops = [];
   let pos = 0;
   let soc = startPct;
 
-  while (pos + kmFor(soc, arriveMinPct) < totalKm) {
+  while (reachFrom(pos, arriveMinPct, soc) < totalKm) {
     if (stops.length >= maxStops) {
-      throw new Error(`Servono più di ${maxStops} soste: controlla consumo e parametri`);
+      throw new Error(`Servono più di ${maxStops} soste: controlla i parametri del veicolo`);
     }
 
-    const reachKm = pos + kmFor(soc, reservePct);
+    const reachKm = reachFrom(pos, reservePct, soc);
     const searchKm = pos + (reachKm - pos) * 0.85;
     const at = pointAt(points, cum, searchKm);
 
@@ -121,9 +234,9 @@ export async function planTrip({
     else candidates.sort((a, b) => b.kw - a.kw || b.km - a.km);
     const best = candidates[0];
 
-    const arrivalPct = soc - pctUsed(best.km - pos);
+    const arrivalPct = soc - pctBetween(pos, best.km);
     const departPct = Math.max(arrivalPct, chargeToPct);
-    const needKwh = ((departPct - arrivalPct) / 100) * vehicle.batteryKwh;
+    const needKwh = ((departPct - arrivalPct) / 100) * battery;
     const avgKw = Math.min(vehicle.maxDcKw, best.kw) * MODEL.averageChargeFactor;
     const chargeMinutes = (needKwh / MODEL.chargeEfficiency / avgKw) * 60;
 
@@ -141,8 +254,8 @@ export async function planTrip({
     pos = best.km;
   }
 
-  const finalPct = soc - pctUsed(totalKm - pos);
-  const drivingMinutes = (totalKm / conditions.avgKmh) * 60;
+  const finalPct = soc - pctBetween(pos, totalKm);
+  const drivingMinutes = minutesBetween(segs, 0, totalKm);
   const chargeMinutes = stops.reduce((sum, s) => sum + s.chargeMinutes, 0);
 
   return {
@@ -151,7 +264,7 @@ export async function planTrip({
     chargeMinutes,
     totalMinutes: drivingMinutes + chargeMinutes,
     finalPct,
-    consumptionKwhPerKm: cons,
+    consumptionKwhPerKm: energyBetween(segs, 0, totalKm) / totalKm,
     stops,
   };
 }
@@ -222,9 +335,14 @@ export function nextAhead(items, km, marginKm = 0.05) {
   return items.find((item) => item.km > km + marginKm) ?? null;
 }
 
-// Raggio (km) di ciò che si raggiunge in `minutes` alla velocità indicata, con un minimo da fermo.
-export function reachRadiusKm(speedKmh, minutes = 5) {
-  return Math.max((speedKmh * minutes) / 60, 0.5);
+// Raggio (km) della vista di guida. Sopra i 30 km/h è ciò che si raggiunge in `minutes`;
+// sotto, il raggio si riduce fino a 300 m da fermo per mostrare più dettaglio in rotonde e svincoli.
+export function viewRadiusKm(speedKmh, minutes = 5) {
+  const detailKm = 0.3;
+  const cruiseKm = 30;
+  if (speedKmh >= cruiseKm) return (speedKmh * minutes) / 60;
+  const cruiseRadiusKm = (cruiseKm * minutes) / 60;
+  return detailKm + (cruiseRadiusKm - detailKm) * (Math.max(0, speedKmh) / cruiseKm);
 }
 
 // Zoom Leaflet che mostra un'area larga 2 × radiusKm, data la larghezza della mappa in pixel.

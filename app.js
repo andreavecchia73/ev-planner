@@ -4,33 +4,38 @@ import {
   routeSteps,
   locateOnRoute,
   nextAhead,
-  reachRadiusKm,
+  viewRadiusKm,
   zoomForRadius,
   haversineKm,
   bearingDeg,
   smoothAngle,
+  buildProfile,
+  makeAltitudeAt,
+  energyBetween,
+  minutesBetween,
 } from './planner.js';
 
 const STORAGE_KEY = 'ev-planner-settings';
 const FIELDS = [
-  'from', 'to', 'batteryKwh', 'consumptionKwh100', 'maxDcKw', 'startPct',
-  'arriveMinPct', 'chargeToPct', 'reservePct', 'tempC', 'avgKmh', 'ocmKey',
+  'from', 'to', 'batteryKwh', 'maxDcKw', 'startPct', 'arriveMinPct', 'chargeToPct',
+  'reservePct', 'tempC', 'ocmKey',
 ];
+// Valori di partenza: Toyota Proace City Electric, batteria 50 kWh. La potenza DC va verificata sulla scheda tecnica.
 const DEFAULTS = {
-  batteryKwh: 60,
-  consumptionKwh100: 18,
-  maxDcKw: 150,
+  batteryKwh: 50,
+  maxDcKw: 100,
   startPct: 90,
   arriveMinPct: 10,
   chargeToPct: 80,
   reservePct: 5,
   tempC: 15,
-  avgKmh: 100,
 };
 const ANNOUNCE_KM = 0.3; // annuncio vocale quando la manovra è a 300 m
 const ZOOM_HYSTERESIS = 0.75; // lo zoom cambia solo se la scala ideale si discosta di questo valore
 const MIN_HEADING_KM = 0.015; // sotto 15 m il rumore del GPS non dice nulla sulla direzione
 const RECALC_COOLDOWN_MS = 60000; // evita ricalcoli ripetuti mentre la carica resta sotto la scorta
+const DEFAULT_SPEED_KMH = 30; // velocità assunta finché il GPS non la fornisce
+const ALTITUDE_STEP_KM = 2; // un campione di altitudine ogni 2 km
 
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -69,7 +74,8 @@ function setStatus(text, isError = false) {
   el.classList.toggle('error', isError);
 }
 
-// Servizi esterni: Nominatim per la geocodifica, OSRM per il percorso, OpenChargeMap per le colonnine.
+// Servizi esterni: Nominatim per la geocodifica, OSRM per il percorso, OpenChargeMap per le colonnine,
+// Open-Meteo per l'altimetria.
 async function geocode(query) {
   const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`;
   const res = await fetch(url, { headers: { 'Accept-Language': 'it' } });
@@ -90,6 +96,37 @@ async function fetchRoute(a, b) {
     points: route.geometry.coordinates.map(([lon, lat]) => ({ lat, lon })),
     steps: route.legs.flatMap((leg) => leg.steps),
   };
+}
+
+// Altitudini campionate ogni ALTITUDE_STEP_KM. Se il servizio non risponde il calcolo prosegue in piano.
+async function fetchAltitudeAt(points, cum) {
+  const indexes = [];
+  let next = 0;
+  for (let i = 0; i < points.length; i++) {
+    if (cum[i] >= next) {
+      indexes.push(i);
+      next += ALTITUDE_STEP_KM;
+    }
+  }
+  if (indexes.at(-1) !== points.length - 1) indexes.push(points.length - 1);
+
+  try {
+    const altitudes = [];
+    for (let start = 0; start < indexes.length; start += 100) {
+      const chunk = indexes.slice(start, start + 100).map((i) => points[i]);
+      const params = new URLSearchParams({
+        latitude: chunk.map((p) => p.lat.toFixed(5)).join(','),
+        longitude: chunk.map((p) => p.lon.toFixed(5)).join(','),
+      });
+      const res = await fetch(`https://api.open-meteo.com/v1/elevation?${params}`);
+      if (!res.ok) throw new Error(`Altimetria: HTTP ${res.status}`);
+      const data = await res.json();
+      altitudes.push(...data.elevation);
+    }
+    return makeAltitudeAt(indexes.map((i) => cum[i]), altitudes);
+  } catch {
+    return null;
+  }
 }
 
 async function fetchChargers(point, radiusKm, key) {
@@ -118,10 +155,9 @@ function planParams(form, startPct) {
   return {
     vehicle: {
       batteryKwh: Number(form.batteryKwh),
-      consumptionWhPerKm: Number(form.consumptionKwh100) * 10, // kWh/100 km → Wh/km
       maxDcKw: Number(form.maxDcKw),
     },
-    conditions: { tempC: Number(form.tempC), avgKmh: Number(form.avgKmh) },
+    conditions: { tempC: Number(form.tempC) },
     startPct,
     arriveMinPct: Number(form.arriveMinPct),
     chargeToPct: Number(form.chargeToPct),
@@ -130,17 +166,30 @@ function planParams(form, startPct) {
   };
 }
 
-// Percorso da un punto a un altro, con soste di ricarica e passi di guida.
+// Percorso da un punto a un altro: profilo di consumo per tipo di strada e dislivello, soste di ricarica.
 async function planRoute(from, to, form, startPct, { nearestFirst = false } = {}) {
   const { points, steps } = await fetchRoute(from, to);
-  const result = await planTrip({ points, nearestFirst, ...planParams(form, startPct) });
-  return { points, cum: cumulativeKm(points), steps: routeSteps(steps), result, startPct };
+  const cum = cumulativeKm(points);
+  const totalKm = cum.at(-1);
+  const altitudeAt = await fetchAltitudeAt(points, cum);
+  const profile = buildProfile(steps, { totalKm, tempC: Number(form.tempC), altitudeAt });
+  const result = await planTrip({ points, profile, nearestFirst, ...planParams(form, startPct) });
+  return {
+    points,
+    cum,
+    steps: routeSteps(steps),
+    profile,
+    result,
+    startPct,
+    altitudeFound: altitudeAt !== null,
+  };
 }
 
 // Mappa
 const map = L.map('map').setView([45, 9], 6);
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '© OpenStreetMap',
+  keepBuffer: 4, // più tile ai bordi: meno vuoti durante la rotazione
 }).addTo(map);
 const layer = L.layerGroup().addTo(map);
 
@@ -163,7 +212,7 @@ function renderResult(result) {
     ['Tempo di guida', formatMinutes(result.drivingMinutes)],
     ['Tempo di ricarica', formatMinutes(result.chargeMinutes)],
     ['Tempo totale', formatMinutes(result.totalMinutes)],
-    ['Consumo stimato', `${(result.consumptionKwhPerKm * 100).toFixed(1)} kWh/100 km`],
+    ['Consumo medio', `${(result.consumptionKwhPerKm * 100).toFixed(1)} kWh/100 km`],
     ['SoC all\'arrivo', `${result.finalPct.toFixed(0)}%`],
     ['Soste', String(result.stops.length)],
   ];
@@ -221,7 +270,7 @@ async function onSubmit(event) {
     renderResult(planned.result);
     renderMap(planned.points, planned.result.stops);
     $('startNav').hidden = false;
-    setStatus('');
+    setStatus(planned.altitudeFound ? '' : 'Altimetria non disponibile: consumo calcolato senza dislivelli.');
   } catch (err) {
     setStatus(err.message, true);
   } finally {
@@ -248,9 +297,9 @@ function setNavWarn(text) {
   $('nav-warn').textContent = text;
 }
 
-// Carica stimata dopo aver percorso km a partire dalla posizione di riferimento.
-function pctUsed(km) {
-  return (km * trip.result.consumptionKwhPerKm / Number(trip.form.batteryKwh)) * 100;
+// Percentuale di batteria consumata tra due km del percorso, con il profilo del viaggio corrente.
+function pctBetween(a, b) {
+  return (energyBetween(trip.profile, a, b) / Number(trip.form.batteryKwh)) * 100;
 }
 
 async function keepScreenOn() {
@@ -284,10 +333,10 @@ function startNavigation() {
     watchId: null,
     wakeLock: null,
     marker: null,
-    follow: true, // la mappa segue la posizione finché non la trascini
+    follow: true, // la mappa segue la posizione finché non la sblocchi
     zoom: null,
-    speedKmh: Number(trip.form.avgKmh),
     speedMs: null,
+    prevTime: null,
     dragging: false, // lo slider non viene sovrascritto mentre lo trascini
     heading: 0, // rotta in gradi, 0 = nord
     prevFix: null,
@@ -311,6 +360,13 @@ function startNavigation() {
   keepScreenOn();
 }
 
+// Velocità dal GPS, oppure stimata dagli ultimi due fix se il dispositivo non la fornisce.
+function speedFor(fix, pos) {
+  if (pos.coords.speed != null && pos.coords.speed >= 0) return pos.coords.speed;
+  if (!nav.prevFix || nav.prevTime === null || pos.timestamp <= nav.prevTime) return null;
+  return (haversineKm(nav.prevFix, fix) * 1000) / ((pos.timestamp - nav.prevTime) / 1000);
+}
+
 function onFix(pos) {
   if (!nav || !trip) return;
   const fix = { lat: pos.coords.latitude, lon: pos.coords.longitude };
@@ -320,14 +376,15 @@ function onFix(pos) {
   nav.hint = loc.index;
   nav.offRouteKm = loc.offRouteKm;
 
-  // Senza dati dal veicolo la carica si stima dai km percorsi: lo slider la riallinea.
-  if (nav.soc === null) nav.soc = trip.startPct - pctUsed(loc.km);
-  else if (nav.km !== null && loc.km > nav.km) nav.soc -= pctUsed(loc.km - nav.km);
+  // La carica si stima dal profilo del viaggio, con la batteria riallineata dallo slider.
+  if (nav.soc === null) nav.soc = trip.startPct - pctBetween(0, loc.km);
+  else if (nav.km !== null && loc.km > nav.km) nav.soc -= pctBetween(nav.km, loc.km);
   nav.km = loc.km;
 
+  const speedMs = speedFor(fix, pos);
   updateHeading(fix, pos);
   $('nav-gps').textContent = `Precisione GPS ±${Math.round(pos.coords.accuracy)} m · © OpenStreetMap`;
-  if (nav.follow) followMap(fix, pos.coords.speed);
+  if (nav.follow) followMap(fix, speedMs);
   else placeMarker(fix);
   if ($('nav').offsetHeight !== nav.panelH) layoutMap(); // il pannello cambia altezza: la freccia si riposiziona
   refresh();
@@ -338,7 +395,7 @@ function refresh() {
   if (!nav || nav.km === null || !trip) return;
   const km = nav.km;
   const totalKm = trip.cum.at(-1);
-  const socAt = (targetKm) => nav.soc - pctUsed(targetKm - km);
+  const socAt = (targetKm) => nav.soc - pctBetween(km, targetKm);
   const reserve = Number(trip.form.reservePct);
 
   const step = nextAhead(trip.steps, km);
@@ -355,7 +412,7 @@ function refresh() {
   const chargeLeft = trip.result.stops
     .filter((s) => s.km > km)
     .reduce((sum, s) => sum + s.chargeMinutes, 0);
-  const minutes = (remainingKm / Number(trip.form.avgKmh)) * 60 + chargeLeft;
+  const minutes = minutesBetween(trip.profile, km, totalKm) + chargeLeft;
 
   const rows = [
     ['Km all\'arrivo', formatDistance(remainingKm)],
@@ -394,11 +451,18 @@ function refresh() {
   }
 }
 
-// Slider: riallinea la carica alla batteria reale e aggiorna subito la dashboard.
+// Slider durante il trascinamento: riallinea la stima e aggiorna la dashboard.
 function onSocInput() {
   if (!nav) return;
   nav.soc = Number($('navPct').value);
   refresh();
+}
+
+// Slider rilasciato: il piano di viaggio e le ricariche si ricalcolano dalla posizione attuale.
+function onSocChange() {
+  if (!nav) return;
+  nav.dragging = false;
+  recalculate();
 }
 
 function onGpsError(err) {
@@ -419,7 +483,7 @@ async function recalculate({ nearestFirst = false } = {}) {
   nav.busy = true;
   nav.lastRecalc = Date.now();
   const pct = Math.max(0, Math.round(nav.soc));
-  setNavWarn(nearestFirst ? 'Carica sotto la scorta: cerco la sosta più vicina…' : 'Ricalcolo del percorso…');
+  setNavWarn(nearestFirst ? 'Carica sotto la scorta: cerco la sosta più vicina…' : 'Ricalcolo del piano di viaggio…');
   try {
     const planned = await planRoute(nav.lastFix, trip.destination, trip.form, pct, { nearestFirst });
     if (!nav) return; // navigazione terminata durante il calcolo
@@ -445,6 +509,7 @@ async function recalculate({ nearestFirst = false } = {}) {
 function updateHeading(fix, pos) {
   if (!nav.prevFix) {
     nav.prevFix = fix;
+    nav.prevTime = pos.timestamp;
     return;
   }
   const moved = haversineKm(nav.prevFix, fix);
@@ -456,7 +521,10 @@ function updateHeading(fix, pos) {
     target = bearingDeg(nav.prevFix, fix);
   }
   if (target !== null) nav.heading = smoothAngle(nav.heading, target, 0.35);
-  if (moved > MIN_HEADING_KM) nav.prevFix = fix;
+  if (moved > MIN_HEADING_KM) {
+    nav.prevFix = fix;
+    nav.prevTime = pos.timestamp;
+  }
 }
 
 function placeMarker(fix) {
@@ -492,14 +560,15 @@ function layoutMap() {
   map.invalidateSize({ pan: false });
 }
 
-// Centro sulla posizione e zoom che mostra l'area raggiungibile in 5 minuti alla velocità attuale.
-// Lo zoom cambia a livelli interi e solo oltre una soglia: niente cambi a ogni fix, niente lampeggi.
+// Centro sulla posizione e zoom che mostra l'area raggiungibile in 5 minuti alla velocità attuale,
+// con più dettaglio sotto i 30 km/h (rotonde, svincoli). Lo zoom cambia a livelli interi e solo oltre
+// una soglia: niente cambi a ogni fix, niente lampeggi.
 function followMap(fix, speedMs) {
   if (!nav) return;
   nav.speedMs = speedMs;
-  nav.speedKmh = speedMs != null && speedMs >= 0 ? speedMs * 3.6 : Number(trip.form.avgKmh);
+  const speedKmh = speedMs != null ? speedMs * 3.6 : DEFAULT_SPEED_KMH;
 
-  const target = zoomForRadius(reachRadiusKm(nav.speedKmh), fix.lat, window.innerWidth);
+  const target = zoomForRadius(viewRadiusKm(speedKmh), fix.lat, window.innerWidth);
   let animate = false;
   if (nav.zoom === null) {
     nav.zoom = Math.round(target);
@@ -561,13 +630,14 @@ fillForm();
 $('trip').addEventListener('submit', onSubmit);
 $('startNav').addEventListener('click', startNavigation);
 $('navPct').addEventListener('input', onSocInput);
-$('recalc').addEventListener('click', () => recalculate());
-$('stopNav').addEventListener('click', stopNavigation);
-$('recenter').addEventListener('click', toggleFollow);
-window.addEventListener('resize', () => layoutMap());
+$('navPct').addEventListener('change', onSocChange);
 $('navPct').addEventListener('pointerdown', () => {
   if (nav) nav.dragging = true;
 });
 window.addEventListener('pointerup', () => {
   if (nav) nav.dragging = false;
 });
+$('recalc').addEventListener('click', () => recalculate());
+$('stopNav').addEventListener('click', stopNavigation);
+$('recenter').addEventListener('click', toggleFollow);
+window.addEventListener('resize', () => layoutMap());

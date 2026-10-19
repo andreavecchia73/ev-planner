@@ -21,10 +21,10 @@
       </fieldset>
 
       <fieldset>
-        <legend>Veicolo (i valori sono esempi: sostituiscili con i tuoi)</legend>
+        <legend>Veicolo: Toyota Proace City Electric</legend>
         <label>Batteria utile (kWh) <input id="batteryKwh" type="number" step="any" min="1" /></label>
-        <label>Consumo misurato (kWh/100 km) <input id="consumptionKwh100" type="number" step="any" min="1" /></label>
         <label>Potenza DC massima (kW) <input id="maxDcKw" type="number" step="any" min="1" /></label>
+        <p class="attribution">Consumi di riferimento: autostrada 22, superstrada 18, centro abitato 15 kWh/100 km. Il consumo sale in salita e scende in discesa.</p>
       </fieldset>
 
       <fieldset>
@@ -34,7 +34,6 @@
         <label>Riserva di sicurezza (%) <input id="reservePct" type="number" min="0" max="100" /></label>
         <label>Ricarica fino a (%) <input id="chargeToPct" type="number" min="0" max="100" /></label>
         <label>Temperatura media (°C) <input id="tempC" type="number" step="any" /></label>
-        <label>Velocità media (km/h) <input id="avgKmh" type="number" min="1" /></label>
       </fieldset>
 
       <fieldset>
@@ -64,7 +63,7 @@
     <p id="nav-dist" class="nav-sub"></p>
     <dl id="nav-dash"></dl>
     <p id="nav-warn" class="warn" role="alert"></p>
-    <label class="soc">Batteria (stima, trascina per correggere): <output id="navPctOut">—</output>
+    <label class="soc">Batteria (stima, rilascia lo slider per aggiornare il piano): <output id="navPctOut">—</output>
       <input id="navPct" type="range" min="0" max="100" step="1" />
     </label>
     <div class="nav-buttons">
