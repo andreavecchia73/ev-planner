@@ -71,6 +71,18 @@ test('viaggio lungo: una sosta sulla colonnina più potente raggiungibile', asyn
   assert.ok(res.chargeMinutes > 0);
 });
 
+test('ricalcolo verso la sosta più vicina invece della più potente', async () => {
+  const chargers = async () => [
+    { ...at(200), name: 'Lontana 150 kW', kw: 150 },
+    { ...at(50), name: 'Vicina 50 kW', kw: 50 },
+  ];
+  const powerFirst = await planTrip({ ...base, points: line(300), findChargers: chargers });
+  const nearest = await planTrip({ ...base, points: line(300), findChargers: chargers, nearestFirst: true });
+  assert.equal(powerFirst.stops[0].name, 'Lontana 150 kW');
+  assert.equal(nearest.stops[0].name, 'Vicina 50 kW');
+  assert.ok(Math.abs(nearest.stops[0].km - 50) < 0.5);
+});
+
 test('nessuna colonnina disponibile: errore esplicito', async () => {
   await assert.rejects(
     planTrip({ ...base, points: line(400), findChargers: async () => [] }),

@@ -17,6 +17,7 @@ const DEFAULTS = {
   avgKmh: 100,
 };
 const ANNOUNCE_KM = 0.3; // annuncio vocale quando la manovra è a 300 m
+const RECALC_COOLDOWN_MS = 60000; // evita ricalcoli ripetuti mentre la carica resta sotto la scorta
 
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -117,10 +118,10 @@ function planParams(form, startPct) {
 }
 
 // Percorso da un punto a un altro, con soste di ricarica e passi di guida.
-async function planRoute(from, to, form, startPct) {
+async function planRoute(from, to, form, startPct, { nearestFirst = false } = {}) {
   const { points, steps } = await fetchRoute(from, to);
-  const result = await planTrip({ points, ...planParams(form, startPct) });
-  return { points, cum: cumulativeKm(points), steps: routeSteps(steps), result };
+  const result = await planTrip({ points, nearestFirst, ...planParams(form, startPct) });
+  return { points, cum: cumulativeKm(points), steps: routeSteps(steps), result, startPct };
 }
 
 // Mappa
@@ -234,6 +235,11 @@ function setNavWarn(text) {
   $('nav-warn').textContent = text;
 }
 
+// Carica stimata dopo aver percorso km a partire dalla posizione di riferimento.
+function pctUsed(km) {
+  return (km * trip.result.consumptionKwhPerKm / Number(trip.form.batteryKwh)) * 100;
+}
+
 async function keepScreenOn() {
   try {
     if (nav) nav.wakeLock = await navigator.wakeLock.request('screen');
@@ -252,8 +258,21 @@ function startNavigation() {
     setStatus('La navigazione richiede HTTPS e un browser con geolocalizzazione.', true);
     return;
   }
-  nav = { hint: 0, announced: null, lastFix: null, watchId: null, wakeLock: null, marker: null };
-  $('navPct').value = trip.form.startPct;
+  nav = {
+    hint: 0,
+    km: null, // posizione lungo il percorso, in km
+    soc: null, // carica stimata o riallineata, in %
+    announced: null,
+    lastFix: null,
+    lastRecalc: 0,
+    busy: false,
+    offRouteKm: 0,
+    watchId: null,
+    wakeLock: null,
+    marker: null,
+  };
+  $('navPct').value = Math.round(trip.startPct);
+  $('navPctOut').textContent = `${Math.round(trip.startPct)}%`;
   $('nav').hidden = false;
   setNavWarn('In attesa del segnale GPS…');
   nav.watchId = navigator.geolocation.watchPosition(onFix, onGpsError, {
@@ -271,8 +290,29 @@ function onFix(pos) {
 
   const loc = locateOnRoute(trip.points, trip.cum, fix, nav.hint);
   nav.hint = loc.index;
-  const km = loc.km;
+  nav.offRouteKm = loc.offRouteKm;
+
+  // Senza dati dal veicolo la carica si stima dai km percorsi: lo slider la riallinea.
+  if (nav.soc === null) nav.soc = trip.startPct - pctUsed(loc.km);
+  else if (nav.km !== null && loc.km > nav.km) nav.soc -= pctUsed(loc.km - nav.km);
+  nav.km = loc.km;
+
+  if (!nav.marker) {
+    nav.marker = L.circleMarker([fix.lat, fix.lon], { radius: 8, color: '#1a73e8', fillOpacity: 1 }).addTo(map);
+  } else {
+    nav.marker.setLatLng([fix.lat, fix.lon]);
+  }
+  $('nav-gps').textContent = `Precisione GPS ±${Math.round(pos.coords.accuracy)} m`;
+  refresh();
+}
+
+// Aggiorna manovra, dashboard e controllo della scorta.
+function refresh() {
+  if (!nav || nav.km === null || !trip) return;
+  const km = nav.km;
   const totalKm = trip.cum.at(-1);
+  const socAt = (targetKm) => nav.soc - pctUsed(targetKm - km);
+  const reserve = Number(trip.form.reservePct);
 
   const step = nextAhead(trip.steps, km);
   $('nav-next').textContent = step ? step.text : 'Percorso completato';
@@ -283,29 +323,54 @@ function onFix(pos) {
   }
 
   const stop = nextAhead(trip.result.stops, km);
-  $('nav-stop').textContent = stop
-    ? `Colonnina: ${stop.name} · ${formatDistance(stop.km - km)} · arrivo ${stop.arrivalPct.toFixed(0)}% → ${stop.departPct.toFixed(0)}% · ${Math.round(stop.chargeMinutes)} min`
-    : 'Nessuna sosta prevista';
-
   const remainingKm = totalKm - km;
   const chargeLeft = trip.result.stops
     .filter((s) => s.km > km)
     .reduce((sum, s) => sum + s.chargeMinutes, 0);
   const minutes = (remainingKm / Number(trip.form.avgKmh)) * 60 + chargeLeft;
-  $('nav-eta').textContent = `Restano ${formatDistance(remainingKm)} · arrivo tra ${formatMinutes(minutes)}`;
 
-  if (loc.offRouteKm > 0.1) {
-    setNavWarn(`Fuori percorso di circa ${Math.round(loc.offRouteKm * 1000)} m: premi "Ricalcola da qui"`);
-  } else {
-    setNavWarn('');
+  const rows = [
+    ['Km all\'arrivo', formatDistance(remainingKm)],
+    ['Prossima tappa', stop ? stop.name : 'nessuna'],
+    ['Km alla tappa', stop ? formatDistance(stop.km - km) : '—'],
+    ['Carica alla tappa', stop ? `${socAt(stop.km).toFixed(0)}%` : '—'],
+    ['Scorta', `${reserve}%`],
+    ['Tempo all\'arrivo', formatMinutes(minutes)],
+  ];
+  const dash = $('nav-dash');
+  dash.replaceChildren();
+  for (const [term, value] of rows) {
+    const dt = document.createElement('dt');
+    dt.textContent = term;
+    const dd = document.createElement('dd');
+    dd.textContent = value;
+    dash.append(dt, dd);
   }
-  $('nav-gps').textContent = `Precisione GPS ±${Math.round(pos.coords.accuracy)} m`;
 
-  if (!nav.marker) {
-    nav.marker = L.circleMarker([fix.lat, fix.lon], { radius: 8, color: '#1a73e8', fillOpacity: 1 }).addTo(map);
-  } else {
-    nav.marker.setLatLng([fix.lat, fix.lon]);
+  // Slider sincronizzato con la stima, a meno che l'utente lo stia trascinando.
+  if (document.activeElement !== $('navPct')) $('navPct').value = Math.round(nav.soc);
+  $('navPctOut').textContent = `${Math.round(nav.soc)}%`;
+
+  if (!nav.busy) {
+    setNavWarn(
+      nav.offRouteKm > 0.1
+        ? `Fuori percorso di circa ${Math.round(nav.offRouteKm * 1000)} m: premi "Ricalcola da qui"`
+        : '',
+    );
   }
+
+  // Carica prevista sotto la scorta alla prossima tappa (o all'arrivo, se non ci sono tappe).
+  const socAtTarget = stop ? socAt(stop.km) : socAt(totalKm);
+  if (socAtTarget < reserve && !nav.busy && Date.now() - nav.lastRecalc > RECALC_COOLDOWN_MS) {
+    recalculate({ nearestFirst: true });
+  }
+}
+
+// Slider: riallinea la carica alla batteria reale e aggiorna subito la dashboard.
+function onSocInput() {
+  if (!nav) return;
+  nav.soc = Number($('navPct').value);
+  refresh();
 }
 
 function onGpsError(err) {
@@ -316,23 +381,32 @@ function onGpsError(err) {
   setNavWarn(text);
 }
 
-// Ricalcolo dalla posizione attuale, con la batteria inserita nel pannello.
-async function recalculate() {
+// Ricalcolo dalla posizione attuale con la carica riallineata. Con nearestFirst sceglie la sosta più vicina.
+async function recalculate({ nearestFirst = false } = {}) {
   if (!nav?.lastFix) {
     setNavWarn('Attendi un segnale GPS prima di ricalcolare');
     return;
   }
-  setNavWarn('Ricalcolo del percorso…');
+  if (nav.busy) return;
+  nav.busy = true;
+  nav.lastRecalc = Date.now();
+  const pct = Math.max(0, Math.round(nav.soc));
+  setNavWarn(nearestFirst ? 'Carica sotto la scorta: cerco la sosta più vicina…' : 'Ricalcolo del percorso…');
   try {
-    const pct = Number($('navPct').value);
-    const planned = await planRoute(nav.lastFix, trip.destination, trip.form, pct);
+    const planned = await planRoute(nav.lastFix, trip.destination, trip.form, pct, { nearestFirst });
+    if (!nav) return; // navigazione terminata durante il calcolo
     trip = { ...planned, destination: trip.destination, form: trip.form };
     nav.hint = 0;
+    nav.km = 0;
+    nav.soc = pct;
     nav.announced = null;
     renderMap(trip.points, trip.result.stops, false);
-    setNavWarn('');
+    setNavWarn(nearestFirst ? `Nuova sosta: ${trip.result.stops[0]?.name ?? 'nessuna'}` : '');
+    refresh();
   } catch (err) {
     setNavWarn(err.message);
+  } finally {
+    if (nav) nav.busy = false;
   }
 }
 
@@ -353,5 +427,6 @@ function stopNavigation() {
 fillForm();
 $('trip').addEventListener('submit', onSubmit);
 $('startNav').addEventListener('click', startNavigation);
-$('recalc').addEventListener('click', recalculate);
+$('navPct').addEventListener('input', onSocInput);
+$('recalc').addEventListener('click', () => recalculate());
 $('stopNav').addEventListener('click', stopNavigation);

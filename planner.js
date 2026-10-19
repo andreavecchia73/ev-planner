@@ -84,6 +84,7 @@ export async function planTrip({
   chargeToPct,
   reservePct,
   findChargers,
+  nearestFirst = false, // primo stop: la colonnina più vicina invece della più potente
   maxStops = 15,
 }) {
   const cum = cumulativeKm(points);
@@ -116,7 +117,8 @@ export async function planTrip({
       throw new Error(`Nessuna colonnina con potenza nota raggiungibile intorno al km ${searchKm.toFixed(0)}`);
     }
 
-    candidates.sort((a, b) => b.kw - a.kw || b.km - a.km);
+    if (nearestFirst && stops.length === 0) candidates.sort((a, b) => a.km - b.km);
+    else candidates.sort((a, b) => b.kw - a.kw || b.km - a.km);
     const best = candidates[0];
 
     const arrivalPct = soc - pctUsed(best.km - pos);
