@@ -1,6 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { haversineKm, consumptionKwhPerKm, planTrip } from './planner.js';
+import {
+  haversineKm,
+  consumptionKwhPerKm,
+  planTrip,
+  cumulativeKm,
+  describeStep,
+  routeSteps,
+  locateOnRoute,
+  nextAhead,
+} from './planner.js';
 
 // Percorso lungo un meridiano con un punto ogni km (1 grado di latitudine ≈ 111,195 km).
 const line = (km) => Array.from({ length: km + 1 }, (_, i) => ({ lat: 45 + i / 111.195, lon: 9 }));
@@ -67,4 +76,42 @@ test('nessuna colonnina disponibile: errore esplicito', async () => {
     planTrip({ ...base, points: line(400), findChargers: async () => [] }),
     /Nessuna colonnina/,
   );
+});
+
+test('istruzioni: svolta, rotonda, arrivo e passi con distanza progressiva', () => {
+  const steps = [
+    { name: 'Via Roma', distance: 1500, maneuver: { type: 'depart', modifier: 'straight', location: [9, 45] } },
+    { name: 'SS11', distance: 4000, maneuver: { type: 'turn', modifier: 'left', location: [9.01, 45.01] } },
+    { name: '', distance: 500, maneuver: { type: 'roundabout', exit: 2, location: [9.02, 45.02] } },
+    { name: 'Via Torino', distance: 0, maneuver: { type: 'arrive', location: [9.03, 45.03] } },
+  ];
+  assert.equal(describeStep(steps[0]), 'Parti su Via Roma');
+  assert.equal(describeStep(steps[1]), 'Svolta a sinistra su SS11');
+  assert.equal(describeStep(steps[2]), 'Alla rotonda, uscita 2');
+  assert.equal(describeStep(steps[3]), 'Sei arrivato a destinazione');
+
+  const items = routeSteps(steps);
+  assert.deepEqual(items.map((i) => i.km), [0, 1.5, 5.5, 6]);
+  assert.deepEqual([items[1].lat, items[1].lon], [45.01, 9.01]);
+});
+
+test('posizione GPS: proiezione sul percorso e nessun salto indietro', () => {
+  const points = line(100);
+  const cum = cumulativeKm(points);
+  // fix a 40 km, appena fuori dalla strada (circa 20 m)
+  const fix = { lat: 45 + 40 / 111.195, lon: 9.0002 };
+  const loc = locateOnRoute(points, cum, fix, 0);
+  assert.ok(Math.abs(loc.km - 40) < 0.5, `km ${loc.km}`);
+  assert.ok(loc.offRouteKm < 0.05);
+
+  // con un suggerimento avanti (60 km) il risultato resta sul tratto corretto
+  const again = locateOnRoute(points, cum, fix, 60);
+  assert.ok(Math.abs(again.km - 40) < 0.5, `km ${again.km}`);
+});
+
+test('prossimo elemento davanti alla posizione', () => {
+  const items = [{ km: 10 }, { km: 25 }, { km: 40 }];
+  assert.equal(nextAhead(items, 0).km, 10);
+  assert.equal(nextAhead(items, 10).km, 25);
+  assert.equal(nextAhead(items, 40), null);
 });

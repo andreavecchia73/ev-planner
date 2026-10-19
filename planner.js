@@ -153,3 +153,69 @@ export async function planTrip({
     stops,
   };
 }
+
+// --- Navigazione -------------------------------------------------------------
+
+const MODIFIER_IT = {
+  left: 'a sinistra',
+  right: 'a destra',
+  'sharp left': 'stretta a sinistra',
+  'sharp right': 'stretta a destra',
+  'slight left': 'leggermente a sinistra',
+  'slight right': 'leggermente a destra',
+  uturn: 'a U',
+};
+
+// Testo italiano per un passo OSRM (step con maneuver, name, distance).
+export function describeStep(step) {
+  const { type, modifier, exit } = step.maneuver;
+  const road = step.name ? ` su ${step.name}` : '';
+  if (type === 'depart') return `Parti${road}`;
+  if (type === 'arrive') return 'Sei arrivato a destinazione';
+  if (type === 'roundabout' || type === 'rotary') {
+    return exit ? `Alla rotonda, uscita ${exit}${road}` : `Alla rotonda${road}`;
+  }
+  if (modifier === 'straight') return `Prosegui dritto${road}`;
+  const side = MODIFIER_IT[modifier];
+  return side ? `Svolta ${side}${road}` : `Prosegui${road}`;
+}
+
+// Passi con distanza progressiva (km) dall'inizio del percorso.
+export function routeSteps(steps) {
+  let km = 0;
+  return steps.map((step) => {
+    const item = {
+      km,
+      text: describeStep(step),
+      lat: step.maneuver.location[1],
+      lon: step.maneuver.location[0],
+    };
+    km += step.distance / 1000;
+    return item;
+  });
+}
+
+// Posizione GPS proiettata sul percorso: vertice più vicino, cercato in avanti a partire da hint
+// per non saltare indietro. Se il punto è lontano dal percorso, ripete la ricerca su tutto il tracciato.
+export function locateOnRoute(points, cum, fix, hint = 0) {
+  const scan = (from, to) => {
+    let best = from;
+    let bestDist = Infinity;
+    for (let i = from; i < to; i++) {
+      const d = haversineKm(points[i], fix);
+      if (d < bestDist) {
+        bestDist = d;
+        best = i;
+      }
+    }
+    return { index: best, offRouteKm: bestDist };
+  };
+  let found = scan(hint, Math.min(points.length, hint + 3000));
+  if (found.offRouteKm > 0.1) found = scan(0, points.length);
+  return { index: found.index, km: cum[found.index], offRouteKm: found.offRouteKm };
+}
+
+// Primo elemento (passo o colonnina, con campo km) davanti alla posizione attuale.
+export function nextAhead(items, km, marginKm = 0.05) {
+  return items.find((item) => item.km > km + marginKm) ?? null;
+}

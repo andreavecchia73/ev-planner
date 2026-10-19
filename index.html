@@ -46,6 +46,8 @@
       <p id="status" role="status"></p>
     </form>
 
+    <button id="startNav" type="button" hidden>Avvia navigazione</button>
+
     <section id="result" hidden>
       <h2>Risultato</h2>
       <dl id="summary"></dl>
@@ -56,6 +58,20 @@
     <div id="map"></div>
     <p class="attribution">Colonnine: <a href="https://openchargemap.org/">OpenChargeMap</a> contributors, <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>. Mappa: © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>.</p>
   </main>
+
+  <section id="nav" aria-live="polite" hidden>
+    <p id="nav-next" class="nav-next">—</p>
+    <p id="nav-dist" class="nav-sub"></p>
+    <p id="nav-stop"></p>
+    <p id="nav-eta"></p>
+    <p id="nav-warn" class="warn" role="alert"></p>
+    <label>Batteria attuale (%) <input id="navPct" type="number" min="0" max="100" /></label>
+    <div class="nav-buttons">
+      <button id="recalc" type="button">Ricalcola da qui</button>
+      <button id="stopNav" type="button">Termina</button>
+    </div>
+    <p id="nav-gps" class="attribution"></p>
+  </section>
 
   <script src="vendor/leaflet/leaflet.js"></script>
   <script type="module" src="app.js"></script>
