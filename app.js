@@ -2,12 +2,12 @@ import { planTrip } from './planner.js';
 
 const STORAGE_KEY = 'ev-planner-settings';
 const FIELDS = [
-  'from', 'to', 'batteryKwh', 'consumptionWhPerKm', 'maxDcKw', 'startPct',
+  'from', 'to', 'batteryKwh', 'consumptionKwh100', 'maxDcKw', 'startPct',
   'arriveMinPct', 'chargeToPct', 'reservePct', 'tempC', 'avgKmh', 'ocmKey',
 ];
 const DEFAULTS = {
   batteryKwh: 60,
-  consumptionWhPerKm: 180,
+  consumptionKwh100: 18,
   maxDcKw: 150,
   startPct: 90,
   arriveMinPct: 10,
@@ -117,7 +117,7 @@ function renderResult(result) {
     ['Tempo di guida', formatMinutes(result.drivingMinutes)],
     ['Tempo di ricarica', formatMinutes(result.chargeMinutes)],
     ['Tempo totale', formatMinutes(result.totalMinutes)],
-    ['Consumo stimato', `${(result.consumptionKwhPerKm * 1000).toFixed(0)} Wh/km`],
+    ['Consumo stimato', `${(result.consumptionKwhPerKm * 100).toFixed(1)} kWh/100 km`],
     ['SoC all\'arrivo', `${result.finalPct.toFixed(0)}%`],
     ['Soste', String(result.stops.length)],
   ];
@@ -171,7 +171,7 @@ async function onSubmit(event) {
       points,
       vehicle: {
         batteryKwh: num('batteryKwh'),
-        consumptionWhPerKm: num('consumptionWhPerKm'),
+        consumptionWhPerKm: num('consumptionKwh100') * 10, // kWh/100 km → Wh/km
         maxDcKw: num('maxDcKw'),
       },
       conditions: { tempC: num('tempC'), avgKmh: num('avgKmh') },

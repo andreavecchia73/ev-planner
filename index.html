@@ -23,7 +23,7 @@
       <fieldset>
         <legend>Veicolo (i valori sono esempi: sostituiscili con i tuoi)</legend>
         <label>Batteria utile (kWh) <input id="batteryKwh" type="number" step="any" min="1" /></label>
-        <label>Consumo misurato (Wh/km) <input id="consumptionWhPerKm" type="number" step="any" min="1" /></label>
+        <label>Consumo misurato (kWh/100 km) <input id="consumptionKwh100" type="number" step="any" min="1" /></label>
         <label>Potenza DC massima (kW) <input id="maxDcKw" type="number" step="any" min="1" /></label>
       </fieldset>
 
@@ -54,6 +54,7 @@
     </section>
 
     <div id="map"></div>
+    <p class="attribution">Colonnine: <a href="https://openchargemap.org/">OpenChargeMap</a> contributors, <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>. Mappa: © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>.</p>
   </main>
 
   <script src="vendor/leaflet/leaflet.js"></script>

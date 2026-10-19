@@ -103,4 +103,6 @@ dd { margin: 0; font-weight: 600; }
   border: 1px solid var(--border);
 }
 
+.attribution { color: var(--muted); font-size: 0.8rem; margin: 8px 0 0; }
+
 [hidden] { display: none !important; }
