@@ -47,6 +47,13 @@
         <label>Chiave <input id="ocmKey" type="password" /></label>
       </fieldset>
 
+      <fieldset>
+        <legend>Home Assistant (batteria della Jaecoo7)</legend>
+        <label>Indirizzo <input id="haUrl" placeholder="https://xxxx.ui.nabu.casa" /></label>
+        <label>Entità batteria <input id="haEntity" placeholder="sensor.chery_connect_battery" /></label>
+        <label>Token di accesso <input id="haToken" type="password" /></label>
+      </fieldset>
+
       <button id="plan" type="submit">Pianifica viaggio</button>
       <p id="status" role="status"></p>
     </form>

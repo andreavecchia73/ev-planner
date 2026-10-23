@@ -19,6 +19,7 @@ export const MODEL = {
   minRateFactor: 0.2, // il consumo in discesa non scende sotto il 20% della tariffa di strada
   chargeEfficiency: 0.9, // energia da rete -> batteria
   averageChargeFactor: 0.6, // potenza media sulla sessione rispetto al picco (curva di carica)
+  minChargerKw: 39, // solo colonnine con potenza superiore a questo valore
 };
 
 const EARTH_RADIUS_KM = 6371;
@@ -221,7 +222,7 @@ export async function planTrip({
         const idx = nearestIndex(points, c);
         return { ...c, kw: c.kw ?? 0, km: cum[idx], offRouteKm: haversineKm(points[idx], c) };
       })
-      .filter((c) => c.kw > 0 && c.km > pos && c.km <= reachKm && c.offRouteKm <= maxOffRouteKm)
+      .filter((c) => c.kw > MODEL.minChargerKw && c.km > pos && c.km <= reachKm && c.offRouteKm <= maxOffRouteKm)
       .sort((a, b) => {
         if (nearestFirst && stops.length === 0) return a.km - b.km;
         if (targetArrivalPct !== null) {

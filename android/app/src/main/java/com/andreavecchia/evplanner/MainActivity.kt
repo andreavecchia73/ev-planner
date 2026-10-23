@@ -25,7 +25,6 @@ class MainActivity : ComponentActivity() {
     private val locationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
-    private lateinit var haStatus: TextView
     private lateinit var web: WebView
     private val handler = Handler(Looper.getMainLooper())
     private val batteryPoll = object : Runnable {
@@ -59,25 +58,16 @@ class MainActivity : ComponentActivity() {
                     callback.invoke(origin, true, false)
                 }
             }
-            addJavascriptInterface(EvBridge(), "EvBridge")
-        }
-
-        // Lo stato di Home Assistant è anche il punto di accesso alle credenziali: toccalo per modificarle.
-        haStatus = TextView(this).apply {
-            setPadding(24, 16, 24, 16)
-            text = "Home Assistant: in attesa di lettura"
-            setOnClickListener { showHaSettings() }
+            addJavascriptInterface(EvBridge(this@MainActivity), "EvBridge")
         }
 
         setContentView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            addView(haStatus)
             addView(web)
         })
         web.loadUrl(PLANNER_URL)
 
         TripState.onBatteryChanged = {
-            updateButton()
             pushBatteryToPlanner()
         }
         handler.post(batteryPoll)
@@ -88,49 +78,10 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    // La riga mostra la batteria letta da Home Assistant, oppure l'errore preciso.
-    private fun updateButton() {
-        val s = TripState.snapshot()
-        haStatus.text = when {
-            s.batteryPct != null -> "Batteria Jaecoo7: ${s.batteryPct.toInt()}%"
-            s.batteryError != null -> "Home Assistant: ${s.batteryError}"
-            else -> "Home Assistant: in attesa di lettura"
-        }
-    }
-
     // La batteria letta da Home Assistant riallinea la stima della pagina, che ripianifica le soste.
     private fun pushBatteryToPlanner() {
         val pct = TripState.snapshot().batteryPct ?: return
         web.evaluateJavascript("window.evSetBattery && window.evSetBattery($pct);", null)
-    }
-
-    // Impostazioni di Home Assistant: indirizzo, entità della batteria e token di accesso.
-    private fun showHaSettings() {
-        val current = HaClient.loadSettings(this)
-        val url = EditText(this).apply { hint = "https://xxxx.ui.nabu.casa"; setText(current.url) }
-        val entity = EditText(this).apply { hint = "sensor.jaecoo7_batteria"; setText(current.entity) }
-        val token = EditText(this).apply {
-            hint = "Token di accesso a lungo termine"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setText(current.token)
-        }
-        val form = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(48, 16, 48, 0)
-            addView(url)
-            addView(entity)
-            addView(token)
-        }
-        AlertDialog.Builder(this)
-            .setTitle("Home Assistant")
-            .setView(form)
-            .setPositiveButton("Salva") { _, _ ->
-                val settings = HaClient.Settings(url.text.toString(), entity.text.toString(), token.text.toString())
-                HaClient.saveSettings(this, settings)
-                HaClient.refreshBattery(settings)
-            }
-            .setNegativeButton("Annulla", null)
-            .show()
     }
 
     companion object {

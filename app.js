@@ -21,7 +21,7 @@ import {
 const STORAGE_KEY = 'ev-planner-settings';
 const FIELDS = [
   'from', 'to', 'vehicle', 'batteryKwh', 'maxDcKw', 'startPct', 'arriveMinPct', 'chargeToPct',
-  'reservePct', 'tempC', 'ocmKey',
+  'reservePct', 'tempC', 'ocmKey', 'haUrl', 'haEntity', 'haToken',
 ];
 // Consumi per tipo di strada in kWh/100 km. Il modello PHEV usa il consumo misto anche per superstrada e centro.
 const VEHICLES = {
@@ -56,7 +56,7 @@ const DEFAULT_SPEED_KMH = 30; // velocità assunta finché il GPS non la fornisc
 const ALTITUDE_STEP_KM = 2; // un campione di altitudine ogni 2 km
 // Dati fissi per la scelta delle soste.
 const STOP_TARGET_PCT = 20; // carica di arrivo alla colonnina da privilegiare
-const STOP_MAX_OFFROUTE_KM = 4; // distanza massima della colonnina dal percorso
+const STOP_MAX_OFFROUTE_KM = 3; // distanza massima della colonnina dal percorso
 const STOP_ARRIVAL_TOLERANCE_PCT = 10; // la carica di arrivo può scendere fino a 10 punti sotto il valore scelto
 const LEARN_MIN_KM = 1; // distanza minima tra due letture per stimare il consumo reale
 const LEARN_MIN_KWH = 0.2; // energia prevista minima per una stima affidabile
@@ -440,6 +440,19 @@ function stepType(step) {
   return 'straight';
 }
 
+// Credenziali di Home Assistant: la pagina le passa all'app Android, che le salva sul telefono.
+function syncHomeAssistant() {
+  try {
+    window.EvBridge?.saveHomeAssistant(JSON.stringify({
+      url: $('haUrl').value.trim(),
+      entity: $('haEntity').value.trim(),
+      token: $('haToken').value.trim(),
+    }));
+  } catch {
+    // bridge non disponibile nel browser
+  }
+}
+
 // Bridge verso l'app Android (display dell'auto): nel browser non esiste e viene ignorato.
 function pushToCar(state) {
   try {
@@ -803,6 +816,8 @@ function stopNavigation() {
 }
 
 fillForm();
+syncHomeAssistant();
+for (const id of ['haUrl', 'haEntity', 'haToken']) $(id).addEventListener('change', syncHomeAssistant);
 $('trip').addEventListener('submit', onSubmit);
 $('startNav').addEventListener('click', startNavigation);
 $('recalc').addEventListener('click', () => recalculate());
