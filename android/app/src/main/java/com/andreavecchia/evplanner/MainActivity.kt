@@ -15,6 +15,7 @@ import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 
@@ -26,6 +27,7 @@ class MainActivity : ComponentActivity() {
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     private lateinit var settingsButton: Button
+    private lateinit var haStatus: TextView
     private lateinit var web: WebView
     private val handler = Handler(Looper.getMainLooper())
     private val batteryPoll = object : Runnable {
@@ -67,9 +69,15 @@ class MainActivity : ComponentActivity() {
             setOnClickListener { showHaSettings() }
         }
 
+        haStatus = TextView(this).apply {
+            setPadding(24, 8, 24, 8)
+            text = "Home Assistant: in attesa di lettura"
+        }
+
         setContentView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(settingsButton)
+            addView(haStatus)
             addView(web)
         })
         web.loadUrl(PLANNER_URL)
@@ -89,10 +97,10 @@ class MainActivity : ComponentActivity() {
     // Il pulsante mostra la batteria letta da Home Assistant, oppure l'errore preciso.
     private fun updateButton() {
         val s = TripState.snapshot()
-        settingsButton.text = when {
+        haStatus.text = when {
             s.batteryPct != null -> "Batteria Jaecoo7: ${s.batteryPct.toInt()}%"
             s.batteryError != null -> "Home Assistant: ${s.batteryError}"
-            else -> "Impostazioni Home Assistant"
+            else -> "Home Assistant: in attesa di lettura"
         }
     }
 
