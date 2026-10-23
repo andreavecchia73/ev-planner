@@ -214,3 +214,12 @@ test('profilo uniforme di riserva: energia coerente con Wh/km', () => {
   const profile = uniformProfile(100, vehicle, conditions);
   assert.ok(Math.abs(profile[0].kwh - 18) < 1e-9);
 });
+
+test('veicolo PHEV: tariffe proprie e correzione dei consumi reali', () => {
+  const steps = [{ ref: 'A4', distance: 10000, duration: 360, maneuver: { type: 'depart', location: [9, 45] } }];
+  const rates = { motorway: 20, expressway: 14, urban: 14 };
+  const base = buildProfile(steps, { totalKm: 10, tempC: 20, rates });
+  assert.ok(Math.abs(base[0].kwh - 2.0) < 1e-9);
+  const learned = buildProfile(steps, { totalKm: 10, tempC: 20, rates, learnedFactor: 1.1 });
+  assert.ok(Math.abs(learned[0].kwh - 2.2) < 1e-9);
+});

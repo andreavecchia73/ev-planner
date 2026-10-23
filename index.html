@@ -21,10 +21,16 @@
       </fieldset>
 
       <fieldset>
-        <legend>Veicolo: Toyota Proace City Electric</legend>
+        <legend>Veicolo</legend>
+        <label>Modello
+          <select id="vehicle">
+            <option value="phev">Jaecoo 7 PHEV</option>
+            <option value="proace">Toyota Proace City Electric</option>
+          </select>
+        </label>
         <label>Batteria utile (kWh) <input id="batteryKwh" type="number" step="any" min="1" /></label>
         <label>Potenza DC massima (kW) <input id="maxDcKw" type="number" step="any" min="1" /></label>
-        <p class="attribution">Consumi di riferimento: autostrada 22, superstrada 18, centro abitato 15 kWh/100 km. Il consumo sale in salita e scende in discesa.</p>
+        <p class="attribution">Il consumo di riferimento dipende dal modello e dal tipo di strada, sale in salita e scende in discesa. Durante il viaggio si corregge con la batteria letta.</p>
       </fieldset>
 
       <fieldset>

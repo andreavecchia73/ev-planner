@@ -17,13 +17,28 @@ import {
 
 const STORAGE_KEY = 'ev-planner-settings';
 const FIELDS = [
-  'from', 'to', 'batteryKwh', 'maxDcKw', 'startPct', 'arriveMinPct', 'chargeToPct',
+  'from', 'to', 'vehicle', 'batteryKwh', 'maxDcKw', 'startPct', 'arriveMinPct', 'chargeToPct',
   'reservePct', 'tempC', 'ocmKey',
 ];
-// Valori di partenza: Toyota Proace City Electric, batteria 50 kWh. La potenza DC va verificata sulla scheda tecnica.
+// Consumi per tipo di strada in kWh/100 km. Il modello PHEV usa il consumo misto anche per superstrada e centro.
+const VEHICLES = {
+  phev: {
+    label: 'Jaecoo 7 PHEV',
+    batteryKwh: 18,
+    maxDcKw: 40,
+    rates: { motorway: 20, expressway: 14, urban: 14 },
+  },
+  proace: {
+    label: 'Toyota Proace City Electric',
+    batteryKwh: 50,
+    maxDcKw: 100, // da verificare sulla scheda tecnica
+    rates: { motorway: 22, expressway: 18, urban: 15 },
+  },
+};
 const DEFAULTS = {
-  batteryKwh: 50,
-  maxDcKw: 100,
+  vehicle: 'phev',
+  batteryKwh: 18,
+  maxDcKw: 40,
   startPct: 90,
   arriveMinPct: 10,
   chargeToPct: 80,
@@ -36,6 +51,8 @@ const MIN_HEADING_KM = 0.015; // sotto 15 m il rumore del GPS non dice nulla sul
 const RECALC_COOLDOWN_MS = 60000; // evita ricalcoli ripetuti mentre la carica resta sotto la scorta
 const DEFAULT_SPEED_KMH = 30; // velocità assunta finché il GPS non la fornisce
 const ALTITUDE_STEP_KM = 2; // un campione di altitudine ogni 2 km
+const LEARN_MIN_KM = 1; // distanza minima tra due letture per stimare il consumo reale
+const LEARN_MIN_KWH = 0.2; // energia prevista minima per una stima affidabile
 
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -66,6 +83,15 @@ function fillForm() {
   for (const field of FIELDS) {
     $(field).value = saved[field] ?? DEFAULTS[field] ?? '';
   }
+  // Prima apertura: i valori di batteria e potenza seguono il modello, non quelli salvati prima.
+  if (!saved.vehicle) applyVehicle(DEFAULTS.vehicle);
+}
+
+function applyVehicle(key) {
+  const vehicle = VEHICLES[key] ?? VEHICLES[DEFAULTS.vehicle];
+  $('vehicle').value = key in VEHICLES ? key : DEFAULTS.vehicle;
+  $('batteryKwh').value = vehicle.batteryKwh;
+  $('maxDcKw').value = vehicle.maxDcKw;
 }
 
 function setStatus(text, isError = false) {
@@ -167,12 +193,13 @@ function planParams(form, startPct) {
 }
 
 // Percorso da un punto a un altro: profilo di consumo per tipo di strada e dislivello, soste di ricarica.
-async function planRoute(from, to, form, startPct, { nearestFirst = false } = {}) {
+async function planRoute(from, to, form, startPct, { nearestFirst = false, learnedFactor = 1 } = {}) {
   const { points, steps } = await fetchRoute(from, to);
   const cum = cumulativeKm(points);
   const totalKm = cum.at(-1);
   const altitudeAt = await fetchAltitudeAt(points, cum);
-  const profile = buildProfile(steps, { totalKm, tempC: Number(form.tempC), altitudeAt });
+  const rates = (VEHICLES[form.vehicle] ?? VEHICLES[DEFAULTS.vehicle]).rates;
+  const profile = buildProfile(steps, { totalKm, tempC: Number(form.tempC), altitudeAt, rates, learnedFactor });
   const result = await planTrip({ points, profile, nearestFirst, ...planParams(form, startPct) });
   return {
     points,
@@ -341,6 +368,8 @@ function startNavigation() {
     prevFix: null,
     panelH: 0,
     socSource: 'stimata', // 'reale' quando arriva la batteria da Home Assistant
+    learnedFactor: 1, // correzione dei consumi ricavata dalle letture reali
+    anchor: null, // ultimo punto noto (km e carica) da cui misurare il consumo reale
   };
   $('nav').hidden = false;
   document.body.classList.add('navigating');
@@ -378,6 +407,7 @@ function onFix(pos) {
   if (nav.soc === null) nav.soc = trip.startPct - pctBetween(0, loc.km);
   else if (nav.km !== null && loc.km > nav.km) nav.soc -= pctBetween(nav.km, loc.km);
   nav.km = loc.km;
+  if (!nav.anchor) nav.anchor = { km: nav.km, pct: nav.soc };
 
   const speedMs = speedFor(fix, pos);
   updateHeading(fix, pos);
@@ -398,8 +428,23 @@ function pushToCar(state) {
 }
 
 // Batteria letta da Home Assistant (app Android, ogni 2 minuti): riallinea la stima e ripianifica le soste.
+// Confronta l'energia reale (calo di batteria) con quella prevista dal profilo, e corregge i consumi.
+function learnFromReading(pct) {
+  const anchor = nav.anchor;
+  if (!anchor || nav.km === null) return;
+  const travelled = nav.km - anchor.km;
+  if (travelled < LEARN_MIN_KM) return;
+  const measuredKwh = ((anchor.pct - pct) / 100) * Number(trip.form.batteryKwh);
+  const predictedKwh = energyBetween(trip.profile, anchor.km, nav.km);
+  if (measuredKwh <= 0 || predictedKwh < LEARN_MIN_KWH) return;
+  const ratio = Math.min(1.8, Math.max(0.5, measuredKwh / predictedKwh));
+  // correzione graduale: una lettura non deve ribaltare il modello
+  nav.learnedFactor = Math.min(1.6, Math.max(0.6, nav.learnedFactor * (0.8 + 0.2 * ratio)));
+}
+
 window.evSetBattery = (pct) => {
   if (!nav || !trip || !Number.isFinite(pct)) return;
+  learnFromReading(pct);
   nav.soc = pct;
   nav.socSource = 'reale';
   recalculate();
@@ -491,12 +536,16 @@ async function recalculate({ nearestFirst = false } = {}) {
   const pct = Math.max(0, Math.round(nav.soc));
   setNavWarn(nearestFirst ? 'Carica sotto la scorta: cerco la sosta più vicina…' : 'Ricalcolo del piano di viaggio…');
   try {
-    const planned = await planRoute(nav.lastFix, trip.destination, trip.form, pct, { nearestFirst });
+    const planned = await planRoute(nav.lastFix, trip.destination, trip.form, pct, {
+      nearestFirst,
+      learnedFactor: nav.learnedFactor,
+    });
     if (!nav) return; // navigazione terminata durante il calcolo
     trip = { ...planned, destination: trip.destination, form: trip.form };
     nav.hint = 0;
     nav.km = 0;
     nav.soc = pct;
+    nav.anchor = { km: 0, pct };
     nav.announced = null;
     nav.notice = nearestFirst ? `Nuova sosta: ${trip.result.stops[0]?.name ?? 'nessuna'}` : '';
     renderMap(trip.points, trip.result.stops, false);
@@ -638,4 +687,5 @@ $('startNav').addEventListener('click', startNavigation);
 $('recalc').addEventListener('click', () => recalculate());
 $('stopNav').addEventListener('click', stopNavigation);
 $('recenter').addEventListener('click', toggleFollow);
+$('vehicle').addEventListener('change', () => applyVehicle($('vehicle').value));
 window.addEventListener('resize', () => layoutMap());

@@ -113,7 +113,10 @@ export function makeAltitudeAt(sampleKm, sampleAlt) {
 
 // Profilo di consumo e tempo: un segmento per passo OSRM, con energia totale (kWh) e minuti.
 // Le distanze dei passi vengono riscalate sulla lunghezza reale del tracciato.
-export function buildProfile(steps, { totalKm, tempC, altitudeAt = null, massKg = MODEL.massKg }) {
+export function buildProfile(
+  steps,
+  { totalKm, tempC, altitudeAt = null, massKg = MODEL.massKg, rates = ROAD_RATES, learnedFactor = 1 },
+) {
   const sumKm = steps.reduce((sum, step) => sum + step.distance / 1000, 0);
   const scale = sumKm > 0 ? totalKm / sumKm : 1;
   const factor = tempFactor(tempC);
@@ -124,13 +127,14 @@ export function buildProfile(steps, { totalKm, tempC, altitudeAt = null, massKg 
     if (lengthKm <= 0) continue;
     const from = km;
     const to = km + lengthKm;
-    const base = lengthKm * (ROAD_RATES[classifyRoad(step)] / 100) * factor;
+    const base = lengthKm * (rates[classifyRoad(step)] / 100) * factor;
     let kwh = base;
     if (altitudeAt) {
       kwh += climbEnergyKwh(altitudeAt(to) - altitudeAt(from), massKg);
       kwh = Math.max(kwh, base * MODEL.minRateFactor);
     }
-    segments.push({ from, to, kwh, minutes: step.duration / 60 });
+    // learnedFactor: correzione ricavata dai consumi reali del viaggio in corso
+    segments.push({ from, to, kwh: kwh * learnedFactor, minutes: step.duration / 60 });
     km = to;
   }
   return segments;
