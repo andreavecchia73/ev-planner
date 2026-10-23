@@ -56,8 +56,8 @@ const DEFAULT_SPEED_KMH = 30; // velocità assunta finché il GPS non la fornisc
 const ALTITUDE_STEP_KM = 2; // un campione di altitudine ogni 2 km
 // Dati fissi per la scelta delle soste.
 const STOP_TARGET_PCT = 20; // carica di arrivo alla colonnina da privilegiare
-const STOP_MAX_OFFROUTE_KM = 3; // distanza massima della colonnina dal percorso
-const STOP_OFFROUTE_TOLERANCE = 1.1; // tolleranza del 10% oltre il limite
+const STOP_MAX_OFFROUTE_KM = 4; // distanza massima della colonnina dal percorso
+const STOP_ARRIVAL_TOLERANCE_PCT = 10; // la carica di arrivo può scendere fino a 10 punti sotto il valore scelto
 const LEARN_MIN_KM = 1; // distanza minima tra due letture per stimare il consumo reale
 const LEARN_MIN_KWH = 0.2; // energia prevista minima per una stima affidabile
 
@@ -197,7 +197,8 @@ function planParams(form, startPct) {
     chargeToPct: Number(form.chargeToPct),
     reservePct: Number(form.reservePct),
     targetArrivalPct: STOP_TARGET_PCT,
-    maxOffRouteKm: STOP_MAX_OFFROUTE_KM * STOP_OFFROUTE_TOLERANCE,
+    maxOffRouteKm: STOP_MAX_OFFROUTE_KM,
+    minArrivalPct: STOP_TARGET_PCT - STOP_ARRIVAL_TOLERANCE_PCT,
     findChargers: (point, radiusKm) => fetchChargers(point, radiusKm, form.ocmKey.trim()),
   };
 }

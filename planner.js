@@ -202,6 +202,7 @@ export async function planTrip({
   findChargers,
   nearestFirst = false, // primo stop: la colonnina più vicina invece della più potente
   targetArrivalPct = null, // carica di arrivo alla colonnina da privilegiare (es. 20)
+  minArrivalPct = null, // carica minima accettata all'arrivo alla colonnina (es. 10)
   maxOffRouteKm = 5, // distanza massima della colonnina dal percorso
   maxStops = 15,
 }) {
@@ -239,17 +240,22 @@ export async function planTrip({
       throw new Error(`Servono più di ${maxStops} soste: controlla i parametri del veicolo`);
     }
 
-    const reachKm = reachFrom(pos, reservePct, soc);
+    // portata con la riserva e portata con il margine minimo di arrivo (es. 10% quando si punta al 20%)
+    const reserveKm = reachFrom(pos, reservePct, soc);
+    const floorKm = reachFrom(pos, Math.max(reservePct, minArrivalPct ?? reservePct), soc);
     // cerca attorno al punto in cui si arriva al livello di carica desiderato, altrimenti a circa 85% della portata
     const targetKm =
       targetArrivalPct === null
         ? null
         : rangeKm(segs, pos, (Math.max(0, soc - targetArrivalPct) / 100) * battery, totalKm);
-    const searchKm = targetKm !== null && targetKm > pos ? Math.min(targetKm, reachKm) : pos + (reachKm - pos) * 0.85;
+    const searchKm = targetKm !== null && targetKm > pos ? Math.min(targetKm, floorKm) : pos + (floorKm - pos) * 0.85;
     const at = pointAt(points, cum, searchKm);
 
-    let candidates = pick(await findChargers(at, 25), pos, soc, reachKm);
-    if (!candidates.length) candidates = pick(await findChargers(at, 60), pos, soc, reachKm);
+    const list = (await findChargers(at, 25)).length
+      ? await findChargers(at, 25)
+      : await findChargers(at, 60);
+    let candidates = pick(list, pos, soc, floorKm);
+    if (!candidates.length) candidates = pick(list, pos, soc, reserveKm);
     if (!candidates.length) {
       throw new Error(`Nessuna colonnina con potenza nota entro ${maxOffRouteKm} km dal percorso, raggiungibile intorno al km ${searchKm.toFixed(0)}`);
     }
