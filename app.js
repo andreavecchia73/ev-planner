@@ -599,6 +599,8 @@ function refresh() {
     stopMin: stop ? stopMinutes : null,
     arrivalKm: remainingKm,
     arrivalMin: minutes,
+    stepText: step ? step.text : null,
+    stepKm: step ? step.km - km : null,
   });
 
   if (!nav.busy) {

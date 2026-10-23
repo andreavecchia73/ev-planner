@@ -42,6 +42,11 @@ class EvScreen(carContext: CarContext) : Screen(carContext) {
 
         val pane = Pane.Builder()
             .addRow(Row.Builder().setTitle("Batteria").addText("$battery$batteryNote").build())
+            .addRow(
+                s.stepText?.let { text ->
+                    Row.Builder().setTitle("Prossima manovra").addText("$text · ${formatKm(s.stepKm ?: 0.0)}").build()
+                } ?: Row.Builder().setTitle("Prossima manovra").addText("—").build(),
+            )
             .addRow(Row.Builder().setTitle("Prossima sosta: ${s.stopName ?: ""}").addText(stop).build())
             .addRow(Row.Builder().setTitle("Arrivo (con ricariche)").addText(arrival).build())
             .build()
