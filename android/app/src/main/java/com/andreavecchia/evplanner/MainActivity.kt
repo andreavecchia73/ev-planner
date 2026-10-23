@@ -26,6 +26,7 @@ class MainActivity : ComponentActivity() {
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     private lateinit var settingsButton: Button
+    private lateinit var web: WebView
     private val handler = Handler(Looper.getMainLooper())
     private val batteryPoll = object : Runnable {
         override fun run() {
@@ -39,7 +40,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         locationPermission.launch(Manifest.permission.ACCESS_FINE_LOCATION)
 
-        val web = WebView(this).apply {
+        web = WebView(this).apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
@@ -68,7 +69,10 @@ class MainActivity : ComponentActivity() {
         })
         web.loadUrl(PLANNER_URL)
 
-        TripState.onBatteryChanged = { updateButton() }
+        TripState.onBatteryChanged = {
+            updateButton()
+            pushBatteryToPlanner()
+        }
         handler.post(batteryPoll)
     }
 
@@ -85,6 +89,12 @@ class MainActivity : ComponentActivity() {
             s.batteryError != null -> "Home Assistant: ${s.batteryError}"
             else -> "Impostazioni Home Assistant"
         }
+    }
+
+    // La batteria letta da Home Assistant riallinea la stima della pagina, che ripianifica le soste.
+    private fun pushBatteryToPlanner() {
+        val pct = TripState.snapshot().batteryPct ?: return
+        web.evaluateJavascript("window.evSetBattery && window.evSetBattery($pct);", null)
     }
 
     // Impostazioni di Home Assistant: indirizzo, entità della batteria e token di accesso.
@@ -118,6 +128,6 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val PLANNER_URL = "https://andreavecchia73.github.io/ev-planner/"
-        private const val BATTERY_POLL_MS = 60_000L
+        private const val BATTERY_POLL_MS = 120_000L
     }
 }

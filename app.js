@@ -340,6 +340,7 @@ function startNavigation() {
     heading: 0, // rotta in gradi, 0 = nord
     prevFix: null,
     panelH: 0,
+    socSource: 'stimata', // 'reale' quando arriva la batteria da Home Assistant
   };
   $('nav').hidden = false;
   document.body.classList.add('navigating');
@@ -396,6 +397,14 @@ function pushToCar(state) {
   }
 }
 
+// Batteria letta da Home Assistant (app Android, ogni 2 minuti): riallinea la stima e ripianifica le soste.
+window.evSetBattery = (pct) => {
+  if (!nav || !trip || !Number.isFinite(pct)) return;
+  nav.soc = pct;
+  nav.socSource = 'reale';
+  recalculate();
+};
+
 // Aggiorna manovra, dashboard e controllo della scorta.
 function refresh() {
   if (!nav || nav.km === null || !trip) return;
@@ -422,7 +431,7 @@ function refresh() {
 
   const stopMinutes = stop ? minutesBetween(trip.profile, km, stop.km) : null;
   const rows = [
-    ['Batteria', `${Math.round(nav.soc)}% stimata`],
+    ['Batteria', `${Math.round(nav.soc)}% ${nav.socSource}`],
     ['Prossima tappa', stop ? `${formatDistance(stop.km - km)} · ${formatMinutes(stopMinutes)}` : 'nessuna'],
     ['Arrivo', `${formatDistance(remainingKm)} · ${formatMinutes(minutes)}`],
     ['Carica alla tappa', stop ? `${socAt(stop.km).toFixed(0)}%` : '—'],
