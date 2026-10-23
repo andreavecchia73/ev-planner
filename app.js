@@ -429,6 +429,17 @@ function onFix(pos) {
   refresh();
 }
 
+// Tipo di manovra per il display dell'auto: arrivo, rotonda, uscita, svolta sinistra/destra, dritto.
+function stepType(step) {
+  const { kind, angle } = maneuverKind(step);
+  if (kind === 'arrive') return 'arrive';
+  if (kind === 'roundabout') return 'roundabout';
+  if (kind === 'exit') return 'exit';
+  if (angle <= -20) return 'left';
+  if (angle >= 20) return 'right';
+  return 'straight';
+}
+
 // Bridge verso l'app Android (display dell'auto): nel browser non esiste e viene ignorato.
 function pushToCar(state) {
   try {
@@ -601,6 +612,7 @@ function refresh() {
     arrivalMin: minutes,
     stepText: step ? step.text : null,
     stepKm: step ? step.km - km : null,
+    stepType: step ? stepType(step) : null,
   });
 
   if (!nav.busy) {

@@ -20,6 +20,7 @@ object TripState {
         val batteryError: String?,
         val stepText: String?,
         val stepKm: Double?,
+        val stepType: String?,
     ) {
         val hasTrip: Boolean get() = arrivalKm != null
     }
@@ -36,6 +37,7 @@ object TripState {
     private var batteryError: String? = null
     private var stepText: String? = null
     private var stepKm: Double? = null
+    private var stepType: String? = null
 
     // Chiamato dal display dell'auto per ridisegnare la schermata quando cambiano i dati.
     var onChanged: (() -> Unit)? = null
@@ -45,7 +47,7 @@ object TripState {
 
     fun snapshot(): Snapshot = Snapshot(
         soc, stopName, stopKm, stopMin, arrivalKm, arrivalMin,
-        batteryPct, batteryUpdatedAt, batteryError, stepText, stepKm,
+        batteryPct, batteryUpdatedAt, batteryError, stepText, stepKm, stepType,
     )
 
     // Dati dal pianificatore web, in formato JSON. Può arrivare da un thread diverso dal principale.
@@ -60,6 +62,7 @@ object TripState {
             arrivalMin = o.optDoubleOrNull("arrivalMin")
             stepText = if (o.isNull("stepText")) null else o.optString("stepText")
             stepKm = o.optDoubleOrNull("stepKm")
+            stepType = if (o.isNull("stepType")) null else o.optString("stepType")
             notifyChanged()
         }
     }

@@ -12,7 +12,6 @@ import android.webkit.GeolocationPermissions
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -26,7 +25,6 @@ class MainActivity : ComponentActivity() {
     private val locationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
-    private lateinit var settingsButton: Button
     private lateinit var haStatus: TextView
     private lateinit var web: WebView
     private val handler = Handler(Looper.getMainLooper())
@@ -64,19 +62,15 @@ class MainActivity : ComponentActivity() {
             addJavascriptInterface(EvBridge(), "EvBridge")
         }
 
-        settingsButton = Button(this).apply {
-            text = "Impostazioni Home Assistant"
-            setOnClickListener { showHaSettings() }
-        }
-
+        // Lo stato di Home Assistant è anche il punto di accesso alle credenziali: toccalo per modificarle.
         haStatus = TextView(this).apply {
-            setPadding(24, 8, 24, 8)
+            setPadding(24, 16, 24, 16)
             text = "Home Assistant: in attesa di lettura"
+            setOnClickListener { showHaSettings() }
         }
 
         setContentView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            addView(settingsButton)
             addView(haStatus)
             addView(web)
         })
@@ -94,7 +88,7 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    // Il pulsante mostra la batteria letta da Home Assistant, oppure l'errore preciso.
+    // La riga mostra la batteria letta da Home Assistant, oppure l'errore preciso.
     private fun updateButton() {
         val s = TripState.snapshot()
         haStatus.text = when {
