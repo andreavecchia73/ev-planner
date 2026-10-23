@@ -1,4 +1,5 @@
 import {
+  MODEL,
   laneAngle,
   maneuverKind,
   planTrip,
@@ -65,6 +66,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // Stato del viaggio pianificato e della navigazione in corso.
 let trip = null;
 let nav = null;
+let lastCarPct = null; // ultima batteria letta da Home Assistant, anche se arriva prima dell'avvio
 
 // Impostazioni per-utente: utili ma non essenziali, quindi ogni accesso è protetto.
 function loadSettings() {
@@ -357,7 +359,8 @@ function startNavigation() {
   nav = {
     hint: 0,
     km: null, // posizione lungo il percorso, in km
-    soc: null, // carica stimata o riallineata, in %
+    soc: lastCarPct, // batteria reale da Home Assistant se già disponibile, altrimenti stimata
+    socSource: lastCarPct === null ? 'stimata' : 'reale',
     announced: null,
     lastFix: null,
     lastRecalc: 0,
@@ -374,7 +377,6 @@ function startNavigation() {
     heading: 0, // rotta in gradi, 0 = nord
     prevFix: null,
     panelH: 0,
-    socSource: 'stimata', // 'reale' quando arriva la batteria da Home Assistant
     learnedFactor: 1, // correzione dei consumi ricavata dalle letture reali
     anchor: null, // ultimo punto noto (km e carica) da cui misurare il consumo reale
   };
@@ -450,7 +452,9 @@ function learnFromReading(pct) {
 }
 
 window.evSetBattery = (pct) => {
-  if (!nav || !trip || !Number.isFinite(pct)) return;
+  if (!Number.isFinite(pct)) return;
+  lastCarPct = pct;
+  if (!nav || !trip) return;
   learnFromReading(pct);
   nav.soc = pct;
   nav.socSource = 'reale';
@@ -534,6 +538,16 @@ function updateTurn(step, km) {
   renderLanes(step.lanes ?? []);
 }
 
+// Carica all'arrivo alla colonnina e tempo per arrivare al 100% con la potenza disponibile.
+function stopChargeLabel(arrivalPct, kw) {
+  const arrival = Math.max(0, arrivalPct);
+  const avgKw = Math.min(Number(trip.form.maxDcKw), kw) * MODEL.averageChargeFactor;
+  if (!(avgKw > 0)) return `${arrival.toFixed(0)}%`;
+  const kwh = ((100 - arrival) / 100) * Number(trip.form.batteryKwh);
+  const minutes = (kwh / MODEL.chargeEfficiency / avgKw) * 60;
+  return `${arrival.toFixed(0)}% · 100% in ${formatMinutes(minutes)}`;
+}
+
 // Aggiorna manovra, dashboard e controllo della scorta.
 function refresh() {
   if (!nav || nav.km === null || !trip) return;
@@ -563,8 +577,7 @@ function refresh() {
     ['Batteria', `${Math.max(0, Math.round(nav.soc))}% ${nav.socSource}`],
     ['Prossima tappa', stop ? `${formatDistance(stop.km - km)} · ${formatMinutes(stopMinutes)}` : 'nessuna'],
     ['Arrivo', `${formatDistance(remainingKm)} · ${formatMinutes(minutes)}`],
-    ['Carica alla tappa', stop ? `${socAt(stop.km).toFixed(0)}%` : '—'],
-    ['Scorta', `${reserve}%`],
+    ['Carica alla tappa', stop ? stopChargeLabel(socAt(stop.km), stop.kw) : '—'],
   ];
   const dash = $('nav-dash');
   dash.replaceChildren();
