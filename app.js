@@ -560,7 +560,7 @@ function refresh() {
 
   const stopMinutes = stop ? minutesBetween(trip.profile, km, stop.km) : null;
   const rows = [
-    ['Batteria', `${Math.round(nav.soc)}% ${nav.socSource}`],
+    ['Batteria', `${Math.max(0, Math.round(nav.soc))}% ${nav.socSource}`],
     ['Prossima tappa', stop ? `${formatDistance(stop.km - km)} · ${formatMinutes(stopMinutes)}` : 'nessuna'],
     ['Arrivo', `${formatDistance(remainingKm)} · ${formatMinutes(minutes)}`],
     ['Carica alla tappa', stop ? `${socAt(stop.km).toFixed(0)}%` : '—'],
@@ -578,7 +578,7 @@ function refresh() {
 
   updateTurn(step, km);
   pushToCar({
-    soc: Math.round(nav.soc),
+    soc: Math.max(0, Math.round(nav.soc)),
     stopName: stop ? stop.name : null,
     stopKm: stop ? stop.km - km : null,
     stopMin: stop ? stopMinutes : null,
