@@ -44,7 +44,12 @@ class MainActivity : ComponentActivity() {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
-            webViewClient = WebViewClient()
+            webViewClient = object : WebViewClient() {
+                // La pagina può caricarsi dopo la prima lettura: alla fine del caricamento le si reinvia la batteria.
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    pushBatteryToPlanner()
+                }
+            }
             webChromeClient = object : WebChromeClient() {
                 override fun onGeolocationPermissionsShowPrompt(
                     origin: String,

@@ -574,7 +574,7 @@ function refresh() {
 
   const stopMinutes = stop ? minutesBetween(trip.profile, km, stop.km) : null;
   const rows = [
-    ['Batteria', `${Math.max(0, Math.round(nav.soc))}% ${nav.socSource}`],
+    ['Batteria', `${Math.max(0, Math.round(nav.soc))}% ${nav.socSource}${nav.socSource === 'stimata' ? ' · in attesa di Home Assistant' : ''}`],
     ['Prossima tappa', stop ? `${formatDistance(stop.km - km)} · ${formatMinutes(stopMinutes)}` : 'nessuna'],
     ['Arrivo', `${formatDistance(remainingKm)} · ${formatMinutes(minutes)}`],
     ['Carica alla tappa', stop ? stopChargeLabel(socAt(stop.km), stop.kw) : '—'],
