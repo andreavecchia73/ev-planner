@@ -153,4 +153,26 @@ body.navigating #map {
   pointer-events: none;
 }
 
+/* Riquadro delle svolte, in alto a sinistra durante la guida */
+#nav-turn {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  z-index: 1001;
+  max-width: 62vw;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+#turn-main { display: flex; align-items: center; gap: 8px; }
+#turn-icon svg { display: block; color: var(--accent); }
+#turn-text { font-size: 0.9rem; font-weight: 600; }
+#turn-lanes { display: flex; gap: 4px; margin-top: 4px; }
+.lane { padding: 2px; border: 1px solid var(--border); border-radius: 4px; opacity: 0.4; }
+.lane.valid { opacity: 1; border-color: var(--accent); }
+.lane svg { display: block; color: var(--fg); }
+.lane.valid svg { color: var(--accent); }
+
 [hidden] { display: none !important; }

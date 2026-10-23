@@ -201,6 +201,8 @@ export async function planTrip({
   reservePct,
   findChargers,
   nearestFirst = false, // primo stop: la colonnina più vicina invece della più potente
+  targetArrivalPct = null, // carica di arrivo alla colonnina da privilegiare (es. 20)
+  maxOffRouteKm = 5, // distanza massima della colonnina dal percorso
   maxStops = 15,
 }) {
   const cum = cumulativeKm(points);
@@ -210,6 +212,23 @@ export async function planTrip({
   const pctBetween = (a, b) => (energyBetween(segs, a, b) / battery) * 100;
   const reachFrom = (pos, floorPct, fromPct) =>
     rangeKm(segs, pos, (Math.max(0, fromPct - floorPct) / 100) * battery, totalKm);
+
+  // Colonnine raggiungibili con la riserva, entro maxOffRouteKm dal percorso, ordinate per preferenza.
+  const pick = (list, pos, soc, reachKm) =>
+    list
+      .map((c) => {
+        const idx = nearestIndex(points, c);
+        return { ...c, kw: c.kw ?? 0, km: cum[idx], offRouteKm: haversineKm(points[idx], c) };
+      })
+      .filter((c) => c.kw > 0 && c.km > pos && c.km <= reachKm && c.offRouteKm <= maxOffRouteKm)
+      .sort((a, b) => {
+        if (nearestFirst && stops.length === 0) return a.km - b.km;
+        if (targetArrivalPct !== null) {
+          const gap = (c) => Math.abs(soc - pctBetween(pos, c.km) - targetArrivalPct);
+          return gap(a) - gap(b) || b.kw - a.kw;
+        }
+        return b.kw - a.kw || b.km - a.km;
+      });
 
   const stops = [];
   let pos = 0;
@@ -221,21 +240,19 @@ export async function planTrip({
     }
 
     const reachKm = reachFrom(pos, reservePct, soc);
-    const searchKm = pos + (reachKm - pos) * 0.85;
+    // cerca attorno al punto in cui si arriva al livello di carica desiderato, altrimenti a circa 85% della portata
+    const targetKm =
+      targetArrivalPct === null
+        ? null
+        : rangeKm(segs, pos, (Math.max(0, soc - targetArrivalPct) / 100) * battery, totalKm);
+    const searchKm = targetKm !== null && targetKm > pos ? Math.min(targetKm, reachKm) : pos + (reachKm - pos) * 0.85;
     const at = pointAt(points, cum, searchKm);
 
-    let found = await findChargers(at, 25);
-    if (!found.length) found = await findChargers(at, 60);
-
-    const candidates = found
-      .map((c) => ({ ...c, kw: c.kw ?? 0, km: cum[nearestIndex(points, c)] }))
-      .filter((c) => c.kw > 0 && c.km > pos && c.km <= reachKm);
+    let candidates = pick(await findChargers(at, 25), pos, soc, reachKm);
+    if (!candidates.length) candidates = pick(await findChargers(at, 60), pos, soc, reachKm);
     if (!candidates.length) {
-      throw new Error(`Nessuna colonnina con potenza nota raggiungibile intorno al km ${searchKm.toFixed(0)}`);
+      throw new Error(`Nessuna colonnina con potenza nota entro ${maxOffRouteKm} km dal percorso, raggiungibile intorno al km ${searchKm.toFixed(0)}`);
     }
-
-    if (nearestFirst && stops.length === 0) candidates.sort((a, b) => a.km - b.km);
-    else candidates.sort((a, b) => b.kw - a.kw || b.km - a.km);
     const best = candidates[0];
 
     const arrivalPct = soc - pctBetween(pos, best.km);
@@ -299,7 +316,33 @@ export function describeStep(step) {
   return side ? `Svolta ${side}${road}` : `Prosegui${road}`;
 }
 
-// Passi con distanza progressiva (km) dall'inizio del percorso.
+// Angolo (gradi, 0 = dritto) delle frecce di svolta e delle corsie.
+const MODIFIER_ANGLE = {
+  straight: 0,
+  left: -90,
+  right: 90,
+  'slight left': -45,
+  'slight right': 45,
+  'sharp left': -135,
+  'sharp right': 135,
+  uturn: 180,
+};
+
+// Tipo di icona per un passo: freccia, rotonda con numero di uscita, uscita autostradale, arrivo.
+export function maneuverKind(item) {
+  const { type, modifier, exit } = item.maneuver;
+  if (type === 'arrive') return { kind: 'arrive' };
+  if (type === 'roundabout' || type === 'rotary') return { kind: 'roundabout', exit };
+  return { kind: type === 'off ramp' ? 'exit' : 'arrow', angle: MODIFIER_ANGLE[modifier] ?? 0 };
+}
+
+// Angolo di una corsia dalle sue indicazioni (es. ['left'] o ['slight right']).
+export function laneAngle(indications = []) {
+  const first = indications[0] ?? 'straight';
+  return MODIFIER_ANGLE[first.replace(/_/g, ' ')] ?? 0;
+}
+
+// Passi con distanza progressiva (km) dall'inizio del percorso, con tipo di manovra e corsie.
 export function routeSteps(steps) {
   let km = 0;
   return steps.map((step) => {
@@ -308,6 +351,8 @@ export function routeSteps(steps) {
       text: describeStep(step),
       lat: step.maneuver.location[1],
       lon: step.maneuver.location[0],
+      maneuver: { type: step.maneuver.type, modifier: step.maneuver.modifier, exit: step.maneuver.exit },
+      lanes: step.intersections?.[0]?.lanes ?? [],
     };
     km += step.distance / 1000;
     return item;

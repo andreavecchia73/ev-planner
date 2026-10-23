@@ -20,6 +20,8 @@ import {
   zoomForRadius,
   bearingDeg,
   smoothAngle,
+  maneuverKind,
+  laneAngle,
 } from './planner.js';
 
 // Percorso lungo un meridiano con un punto ogni km (1 grado di latitudine ≈ 111,195 km).
@@ -222,4 +224,32 @@ test('veicolo PHEV: tariffe proprie e correzione dei consumi reali', () => {
   assert.ok(Math.abs(base[0].kwh - 2.0) < 1e-9);
   const learned = buildProfile(steps, { totalKm: 10, tempC: 20, rates, learnedFactor: 1.1 });
   assert.ok(Math.abs(learned[0].kwh - 2.2) < 1e-9);
+});
+
+test('soste: colonnina vicina al 20% di arrivo e entro 5 km dal percorso', async () => {
+  const chargers = async () => [
+    { ...at(250), name: 'Lontana 150 kW', kw: 150 },
+    { ...at(200), name: 'Giusta 50 kW', kw: 50 },
+  ];
+  const res = await planTrip({ ...base, points: line(300), findChargers: chargers, targetArrivalPct: 20 });
+  assert.equal(res.stops[0].name, 'Giusta 50 kW');
+});
+
+test('soste: esclusa una colonnina a più di 5 km dal percorso', async () => {
+  // lon 9.2 ≈ 15 km fuori percorso: viene scartata anche se più potente
+  const lateral = { lat: at(200).lat, lon: 9.2, name: 'Fuori 150 kW', kw: 150 };
+  const res = await planTrip({
+    ...base,
+    points: line(300),
+    findChargers: async () => [lateral, { ...at(200), name: 'Sul percorso 50 kW', kw: 50 }],
+  });
+  assert.equal(res.stops[0].name, 'Sul percorso 50 kW');
+});
+
+test('svolte: tipo di icona e angolo delle corsie', () => {
+  assert.deepEqual(maneuverKind({ maneuver: { type: 'roundabout', exit: 2 } }), { kind: 'roundabout', exit: 2 });
+  assert.deepEqual(maneuverKind({ maneuver: { type: 'turn', modifier: 'left' } }), { kind: 'arrow', angle: -90 });
+  assert.deepEqual(maneuverKind({ maneuver: { type: 'off ramp', modifier: 'right' } }), { kind: 'exit', angle: 90 });
+  assert.equal(laneAngle(['slight_left']), -45);
+  assert.equal(laneAngle([]), 0);
 });

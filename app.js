@@ -1,4 +1,6 @@
 import {
+  laneAngle,
+  maneuverKind,
   planTrip,
   cumulativeKm,
   routeSteps,
@@ -51,6 +53,9 @@ const MIN_HEADING_KM = 0.015; // sotto 15 m il rumore del GPS non dice nulla sul
 const RECALC_COOLDOWN_MS = 60000; // evita ricalcoli ripetuti mentre la carica resta sotto la scorta
 const DEFAULT_SPEED_KMH = 30; // velocità assunta finché il GPS non la fornisce
 const ALTITUDE_STEP_KM = 2; // un campione di altitudine ogni 2 km
+// Dati fissi per la scelta delle soste.
+const STOP_TARGET_PCT = 20; // carica di arrivo alla colonnina da privilegiare
+const STOP_MAX_OFFROUTE_KM = 5; // distanza massima della colonnina dal percorso
 const LEARN_MIN_KM = 1; // distanza minima tra due letture per stimare il consumo reale
 const LEARN_MIN_KWH = 0.2; // energia prevista minima per una stima affidabile
 
@@ -188,6 +193,8 @@ function planParams(form, startPct) {
     arriveMinPct: Number(form.arriveMinPct),
     chargeToPct: Number(form.chargeToPct),
     reservePct: Number(form.reservePct),
+    targetArrivalPct: STOP_TARGET_PCT,
+    maxOffRouteKm: STOP_MAX_OFFROUTE_KM,
     findChargers: (point, radiusKm) => fetchChargers(point, radiusKm, form.ocmKey.trim()),
   };
 }
@@ -450,6 +457,83 @@ window.evSetBattery = (pct) => {
   recalculate();
 };
 
+// Riquadro in alto a sinistra: icona della prossima manovra, con le corsie da prendere se ci sono.
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function svgEl(tag, attrs) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [name, value] of Object.entries(attrs)) el.setAttribute(name, String(value));
+  return el;
+}
+
+function svgIcon(size, children) {
+  const svg = svgEl('svg', { viewBox: '0 0 40 40', width: size, height: size, 'aria-hidden': 'true' });
+  svg.append(...children);
+  return svg;
+}
+
+// Freccia ruotata di angle gradi (0 = dritto).
+function arrowChildren(angle) {
+  const group = svgEl('g', { transform: `rotate(${angle} 20 20)` });
+  group.append(
+    svgEl('path', { d: 'M20 34 V10', stroke: 'currentColor', 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none' }),
+    svgEl('path', {
+      d: 'M11 19 L20 8 L29 19',
+      stroke: 'currentColor',
+      'stroke-width': 4,
+      'stroke-linecap': 'round',
+      'stroke-linejoin': 'round',
+      fill: 'none',
+    }),
+  );
+  return [group];
+}
+
+function turnIcon(step) {
+  const { kind, angle, exit } = maneuverKind(step);
+  if (kind === 'arrive') {
+    return svgIcon(40, [svgEl('circle', { cx: 20, cy: 20, r: 10, fill: 'currentColor' })]);
+  }
+  if (kind === 'roundabout') {
+    const svg = svgIcon(40, [svgEl('circle', { cx: 20, cy: 20, r: 12, stroke: 'currentColor', 'stroke-width': 3, fill: 'none' })]);
+    if (exit) {
+      const label = svgEl('text', { x: 20, y: 25, 'text-anchor': 'middle', 'font-size': 14, 'font-weight': 700, fill: 'currentColor' });
+      label.textContent = String(exit);
+      svg.append(label);
+    }
+    return svg;
+  }
+  const children = arrowChildren(angle);
+  if (kind === 'exit') {
+    // uscita autostradale: freccia con la sigla USC
+    const label = svgEl('text', { x: 20, y: 39, 'text-anchor': 'middle', 'font-size': 8, 'font-weight': 700, fill: 'currentColor' });
+    label.textContent = 'USC';
+    children.push(label);
+  }
+  return svgIcon(40, children);
+}
+
+function renderLanes(lanes) {
+  const box = $('turn-lanes');
+  box.replaceChildren();
+  box.hidden = lanes.length === 0;
+  for (const lane of lanes) {
+    const wrap = document.createElement('span');
+    wrap.className = lane.valid ? 'lane valid' : 'lane';
+    wrap.append(svgIcon(26, arrowChildren(laneAngle(lane.indications))));
+    box.append(wrap);
+  }
+}
+
+function updateTurn(step, km) {
+  const box = $('nav-turn');
+  box.hidden = !step;
+  if (!step) return;
+  $('turn-icon').replaceChildren(turnIcon(step));
+  $('turn-text').textContent = `${step.text} · ${formatDistance(step.km - km)}`;
+  renderLanes(step.lanes ?? []);
+}
+
 // Aggiorna manovra, dashboard e controllo della scorta.
 function refresh() {
   if (!nav || nav.km === null || !trip) return;
@@ -492,6 +576,7 @@ function refresh() {
     dash.append(dt, dd);
   }
 
+  updateTurn(step, km);
   pushToCar({
     soc: Math.round(nav.soc),
     stopName: stop ? stop.name : null,
@@ -507,6 +592,12 @@ function refresh() {
         ? `Fuori percorso di circa ${Math.round(nav.offRouteKm * 1000)} m: premi "Ricalcola da qui"`
         : nav.notice,
     );
+  }
+
+  // Tappa saltata senza ricarica: il piano si ricalcola dalla posizione attuale.
+  const skipped = trip.result.stops.some((s) => s.km < km - 0.3);
+  if (skipped && !nav.busy && Date.now() - nav.lastRecalc > RECALC_COOLDOWN_MS) {
+    recalculate();
   }
 
   // Carica prevista sotto la scorta alla prossima tappa (o all'arrivo, se non ci sono tappe).
@@ -672,6 +763,7 @@ function stopNavigation() {
   nav = null;
   $('nav').hidden = true;
   $('nav-arrow').hidden = true;
+  $('nav-turn').hidden = true;
   document.body.classList.remove('navigating');
   map.dragging.enable();
   map.zoomControl?.addTo(map);
