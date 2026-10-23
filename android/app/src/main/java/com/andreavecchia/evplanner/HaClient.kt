@@ -46,16 +46,17 @@ object HaClient {
         }
         executor.execute {
             try {
-                val pct = fetchState(settings)
+                val state = fetchState(settings)
+                val pct = state.toDoubleOrNull()
                 if (pct != null) TripState.setBattery(pct)
-                else TripState.setBatteryError("Valore batteria non numerico")
+                else TripState.setBatteryError("stato \"$state\", non numerico")
             } catch (e: Exception) {
-                TripState.setBatteryError(e.message ?: "Errore di rete")
+                TripState.setBatteryError(e.message ?: "errore di rete")
             }
         }
     }
 
-    private fun fetchState(settings: Settings): Double? {
+    private fun fetchState(settings: Settings): String {
         val conn = URL("${settings.url}/api/states/${settings.entity}").openConnection() as HttpURLConnection
         try {
             conn.connectTimeout = 10_000
@@ -64,7 +65,7 @@ object HaClient {
             conn.setRequestProperty("Content-Type", "application/json")
             if (conn.responseCode != 200) throw IllegalStateException("Home Assistant HTTP ${conn.responseCode}")
             val body = conn.inputStream.bufferedReader().use { it.readText() }
-            return JSONObject(body).getString("state").toDoubleOrNull()
+            return JSONObject(body).getString("state")
         } finally {
             conn.disconnect()
         }

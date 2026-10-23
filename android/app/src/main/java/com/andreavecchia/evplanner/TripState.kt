@@ -36,6 +36,9 @@ object TripState {
     // Chiamato dal display dell'auto per ridisegnare la schermata quando cambiano i dati.
     var onChanged: (() -> Unit)? = null
 
+    // Chiamato quando cambia la batteria da Home Assistant: serve al telefono per mostrare lo stato.
+    var onBatteryChanged: (() -> Unit)? = null
+
     fun snapshot(): Snapshot = Snapshot(
         soc, stopName, stopKm, stopMin, arrivalKm, arrivalMin,
         batteryPct, batteryUpdatedAt, batteryError,
@@ -61,6 +64,7 @@ object TripState {
             batteryUpdatedAt = System.currentTimeMillis()
             batteryError = null
             notifyChanged()
+            onBatteryChanged?.invoke()
         }
     }
 
@@ -68,6 +72,7 @@ object TripState {
         mainHandler.post {
             batteryError = message
             notifyChanged()
+            onBatteryChanged?.invoke()
         }
     }
 

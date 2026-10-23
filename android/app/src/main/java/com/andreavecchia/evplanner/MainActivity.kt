@@ -25,6 +25,7 @@ class MainActivity : ComponentActivity() {
     private val locationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
+    private lateinit var settingsButton: Button
     private val handler = Handler(Looper.getMainLooper())
     private val batteryPoll = object : Runnable {
         override fun run() {
@@ -55,7 +56,7 @@ class MainActivity : ComponentActivity() {
             addJavascriptInterface(EvBridge(), "EvBridge")
         }
 
-        val settingsButton = Button(this).apply {
+        settingsButton = Button(this).apply {
             text = "Impostazioni Home Assistant"
             setOnClickListener { showHaSettings() }
         }
@@ -67,12 +68,23 @@ class MainActivity : ComponentActivity() {
         })
         web.loadUrl(PLANNER_URL)
 
+        TripState.onBatteryChanged = { updateButton() }
         handler.post(batteryPoll)
     }
 
     override fun onDestroy() {
         handler.removeCallbacks(batteryPoll)
         super.onDestroy()
+    }
+
+    // Il pulsante mostra la batteria letta da Home Assistant, oppure l'errore preciso.
+    private fun updateButton() {
+        val s = TripState.snapshot()
+        settingsButton.text = when {
+            s.batteryPct != null -> "Batteria Jaecoo7: ${s.batteryPct.toInt()}%"
+            s.batteryError != null -> "Home Assistant: ${s.batteryError}"
+            else -> "Impostazioni Home Assistant"
+        }
     }
 
     // Impostazioni di Home Assistant: indirizzo, entità della batteria e token di accesso.
