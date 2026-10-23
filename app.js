@@ -337,13 +337,10 @@ function startNavigation() {
     zoom: null,
     speedMs: null,
     prevTime: null,
-    dragging: false, // lo slider non viene sovrascritto mentre lo trascini
     heading: 0, // rotta in gradi, 0 = nord
     prevFix: null,
     panelH: 0,
   };
-  $('navPct').value = Math.round(trip.startPct);
-  $('navPctOut').textContent = `${Math.round(trip.startPct)}%`;
   $('nav').hidden = false;
   document.body.classList.add('navigating');
   // controlli Leaflet rimossi in guida: ruoterebbero con la mappa
@@ -390,6 +387,15 @@ function onFix(pos) {
   refresh();
 }
 
+// Bridge verso l'app Android (display dell'auto): nel browser non esiste e viene ignorato.
+function pushToCar(state) {
+  try {
+    window.EvBridge?.update(JSON.stringify(state));
+  } catch {
+    // bridge non disponibile
+  }
+}
+
 // Aggiorna manovra, dashboard e controllo della scorta.
 function refresh() {
   if (!nav || nav.km === null || !trip) return;
@@ -414,13 +420,13 @@ function refresh() {
     .reduce((sum, s) => sum + s.chargeMinutes, 0);
   const minutes = minutesBetween(trip.profile, km, totalKm) + chargeLeft;
 
+  const stopMinutes = stop ? minutesBetween(trip.profile, km, stop.km) : null;
   const rows = [
-    ['Km all\'arrivo', formatDistance(remainingKm)],
-    ['Prossima tappa', stop ? stop.name : 'nessuna'],
-    ['Km alla tappa', stop ? formatDistance(stop.km - km) : '—'],
+    ['Batteria', `${Math.round(nav.soc)}% stimata`],
+    ['Prossima tappa', stop ? `${formatDistance(stop.km - km)} · ${formatMinutes(stopMinutes)}` : 'nessuna'],
+    ['Arrivo', `${formatDistance(remainingKm)} · ${formatMinutes(minutes)}`],
     ['Carica alla tappa', stop ? `${socAt(stop.km).toFixed(0)}%` : '—'],
     ['Scorta', `${reserve}%`],
-    ['Tempo all\'arrivo', formatMinutes(minutes)],
   ];
   const dash = $('nav-dash');
   dash.replaceChildren();
@@ -432,9 +438,14 @@ function refresh() {
     dash.append(dt, dd);
   }
 
-  // Slider sincronizzato con la stima, a meno che l'utente lo stia trascinando.
-  if (!nav.dragging) $('navPct').value = Math.round(nav.soc);
-  $('navPctOut').textContent = `${Math.round(nav.soc)}%`;
+  pushToCar({
+    soc: Math.round(nav.soc),
+    stopName: stop ? stop.name : null,
+    stopKm: stop ? stop.km - km : null,
+    stopMin: stop ? stopMinutes : null,
+    arrivalKm: remainingKm,
+    arrivalMin: minutes,
+  });
 
   if (!nav.busy) {
     setNavWarn(
@@ -449,20 +460,6 @@ function refresh() {
   if (socAtTarget < reserve && !nav.busy && Date.now() - nav.lastRecalc > RECALC_COOLDOWN_MS) {
     recalculate({ nearestFirst: true });
   }
-}
-
-// Slider durante il trascinamento: riallinea la stima e aggiorna la dashboard.
-function onSocInput() {
-  if (!nav) return;
-  nav.soc = Number($('navPct').value);
-  refresh();
-}
-
-// Slider rilasciato: il piano di viaggio e le ricariche si ricalcolano dalla posizione attuale.
-function onSocChange() {
-  if (!nav) return;
-  nav.dragging = false;
-  recalculate();
 }
 
 function onGpsError(err) {
@@ -629,14 +626,6 @@ function stopNavigation() {
 fillForm();
 $('trip').addEventListener('submit', onSubmit);
 $('startNav').addEventListener('click', startNavigation);
-$('navPct').addEventListener('input', onSocInput);
-$('navPct').addEventListener('change', onSocChange);
-$('navPct').addEventListener('pointerdown', () => {
-  if (nav) nav.dragging = true;
-});
-window.addEventListener('pointerup', () => {
-  if (nav) nav.dragging = false;
-});
 $('recalc').addEventListener('click', () => recalculate());
 $('stopNav').addEventListener('click', stopNavigation);
 $('recenter').addEventListener('click', toggleFollow);
