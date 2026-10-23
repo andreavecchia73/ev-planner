@@ -21,7 +21,7 @@ import {
 const STORAGE_KEY = 'ev-planner-settings';
 const FIELDS = [
   'from', 'to', 'vehicle', 'batteryKwh', 'maxDcKw', 'startPct', 'arriveMinPct', 'chargeToPct',
-  'reservePct', 'tempC', 'evdcPrice', 'ocmKey', 'haUrl', 'haEntity', 'haToken',
+  'reservePct', 'tempC', 'evdcPrice', 'ocmKey', 'tomtomKey', 'haUrl', 'haEntity', 'haToken',
 ];
 // Consumi per tipo di strada in kWh/100 km. Il modello PHEV usa il consumo misto anche per superstrada e centro.
 const VEHICLES = {
@@ -185,6 +185,21 @@ async function fetchChargers(point, radiusKm, key) {
   }));
 }
 
+// Ritardo dovuto al traffico tra due punti (TomTom Routing). Senza chiave non fa nulla.
+async function fetchTraffic(from, to, key) {
+  if (!key) return null;
+  const url = `https://api.tomtom.com/routing/1/calculateRoute/${from.lat},${from.lon}:${to.lat},${to.lon}/json?key=${encodeURIComponent(key)}&traffic=true&computeTravelTimeFor=all&routeType=fastest`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`TomTom: HTTP ${res.status}`);
+  const data = await res.json();
+  const summary = data.routes?.[0]?.summary;
+  if (!summary) return null;
+  return {
+    travelMin: summary.travelTimeInSeconds / 60,
+    delayMin: (summary.trafficDelayInSeconds ?? 0) / 60,
+  };
+}
+
 // Parametri del pianificatore a partire dal form (campi salvati come stringhe).
 function planParams(form, startPct) {
   return {
@@ -296,12 +311,13 @@ function chargeCostLabel(result) {
   return known.length === costs.length ? `${total} €` : `${total} € (parziale)`;
 }
 
-function renderResult(result) {
+function renderResult(result, traffic = null) {
   const summary = [
     ['Distanza', `${result.totalKm.toFixed(0)} km`],
     ['Tempo di guida', formatMinutes(result.drivingMinutes)],
     ['Tempo di ricarica', formatMinutes(result.chargeMinutes)],
     ['Costo ricarica', chargeCostLabel(result)],
+    ...(traffic ? [['Ritardo traffico', `+${Math.round(traffic.delayMin)} min`]] : []),
     ['Tempo totale', formatMinutes(result.totalMinutes)],
     ['Consumo medio', `${(result.consumptionKwhPerKm * 100).toFixed(1)} kWh/100 km`],
     ['SoC all\'arrivo', `${result.finalPct.toFixed(0)}%`],
@@ -369,9 +385,10 @@ async function onSubmit(event) {
     await sleep(1100); // Nominatim: massimo una richiesta al secondo
     const to = await geocode(form.to);
     const planned = await planRoute(from, to, form, Number(form.startPct));
+    const traffic = await fetchTraffic(from, to, form.tomtomKey.trim()).catch(() => null);
 
-    trip = { ...planned, destination: to, form };
-    renderResult(planned.result);
+    trip = { ...planned, destination: to, form, traffic };
+    renderResult(planned.result, traffic);
     renderMap(planned.points, planned.result.stops);
     $('startNav').hidden = false;
     setStatus(planned.altitudeFound ? '' : 'Altimetria non disponibile: consumo calcolato senza dislivelli.');
@@ -444,6 +461,9 @@ function startNavigation() {
     prevTime: null,
     heading: 0, // rotta in gradi, 0 = nord
     view3d: false, // vista 2D o 3D con edifici
+    traffic: null, // ritardo da traffico dalla posizione attuale
+    trafficAt: 0,
+    trafficBusy: false,
     prevFix: null,
     panelH: 0,
     learnedFactor: 1, // correzione dei consumi ricavata dalle letture reali
@@ -640,6 +660,23 @@ function stopChargeLabel(arrivalPct, kw) {
   return `${arrival.toFixed(0)}% · 100% in ${formatMinutes(minutes)}`;
 }
 
+// Ritardo da traffico dalla posizione attuale, aggiornato al massimo ogni 5 minuti.
+const TRAFFIC_REFRESH_MS = 300000;
+function refreshTraffic() {
+  const key = trip.form.tomtomKey.trim();
+  if (!key || !nav.lastFix || nav.trafficBusy || Date.now() - nav.trafficAt < TRAFFIC_REFRESH_MS) return;
+  nav.trafficBusy = true;
+  nav.trafficAt = Date.now();
+  fetchTraffic(nav.lastFix, trip.destination, key)
+    .then((traffic) => {
+      if (nav) nav.traffic = traffic;
+    })
+    .catch(() => {})
+    .finally(() => {
+      if (nav) nav.trafficBusy = false;
+    });
+}
+
 // Aggiorna manovra, dashboard e controllo della scorta.
 function refresh() {
   if (!nav || nav.km === null || !trip) return;
@@ -657,6 +694,8 @@ function refresh() {
     speak(`${step.text}, tra ${formatDistance(step.km - km)}`);
   }
 
+  refreshTraffic();
+
   const stop = nextAhead(trip.result.stops, km);
   const remainingKm = totalKm - km;
   const chargeLeft = trip.result.stops
@@ -667,6 +706,7 @@ function refresh() {
   const stopMinutes = stop ? minutesBetween(trip.profile, km, stop.km) : null;
   const rows = [
     ['Batteria', `${Math.max(0, Math.round(nav.soc))}% ${nav.socSource}${nav.socSource === 'stimata' ? ' · in attesa di Home Assistant' : ''}`],
+    ['Traffico', nav.traffic ? `+${Math.round(nav.traffic.delayMin)} min` : '—'],
     ['Prossima tappa', stop ? `${formatDistance(stop.km - km)} · ${formatMinutes(stopMinutes)}` : 'nessuna'],
     ['Arrivo', `${formatDistance(remainingKm)} · ${formatMinutes(minutes)}`],
     ['Carica alla tappa', stop ? stopChargeLabel(socAt(stop.km), stop.kw) : '—'],
