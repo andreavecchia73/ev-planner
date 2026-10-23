@@ -224,23 +224,64 @@ async function planRoute(from, to, form, startPct, { nearestFirst = false, learn
 }
 
 // Mappa
-const map = L.map('map').setView([45, 9], 6);
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution: '© OpenStreetMap',
-  keepBuffer: 4, // più tile ai bordi: meno vuoti durante la rotazione
-}).addTo(map);
-const layer = L.layerGroup().addTo(map);
+// Mappa vettoriale (MapLibre): in guida si alterna la vista 2D e 3D con edifici toccando la mappa.
+const EMPTY_LINE = { type: 'FeatureCollection', features: [] };
+const ROUTE_SOURCE = 'route';
+const map = new maplibregl.Map({
+  container: 'map',
+  style: 'https://tiles.openfreemap.org/styles/liberty',
+  center: [9, 45],
+  zoom: 6,
+});
+let routeReady = false;
+let stopMarkers = [];
+
+map.on('load', () => {
+  map.addSource(ROUTE_SOURCE, { type: 'geojson', data: EMPTY_LINE });
+  map.addLayer({
+    id: 'route-line',
+    type: 'line',
+    source: ROUTE_SOURCE,
+    paint: { 'line-color': '#0a7d4f', 'line-width': 6 },
+  });
+  // edifici in 3D: visibili solo nella vista inclinata
+  map.addLayer({
+    id: 'buildings-3d',
+    type: 'fill-extrusion',
+    source: 'openmaptiles',
+    'source-layer': 'building',
+    minzoom: 14,
+    layout: { visibility: 'none' },
+    paint: {
+      'fill-extrusion-color': '#d6d2c8',
+      'fill-extrusion-height': ['get', 'render_height'],
+      'fill-extrusion-base': ['get', 'render_min_height'],
+      'fill-extrusion-opacity': 0.85,
+    },
+  });
+  routeReady = true;
+  if (trip) renderMap(trip.points, trip.result.stops);
+});
 
 function renderMap(points, stops, fit = true) {
-  layer.clearLayers();
-  const line = L.polyline(points.map((p) => [p.lat, p.lon]), { color: '#0a7d4f' });
-  layer.addLayer(line);
-  for (const stop of stops) {
-    const label = document.createElement('div');
-    label.textContent = `${stop.name} (${stop.kw} kW)`;
-    L.marker([stop.lat, stop.lon]).bindPopup(label).addTo(layer);
+  if (!routeReady) return;
+  const coords = points.map((p) => [p.lon, p.lat]);
+  map.getSource(ROUTE_SOURCE).setData({
+    type: 'FeatureCollection',
+    features: [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords } }],
+  });
+  for (const marker of stopMarkers) marker.remove();
+  stopMarkers = stops.map((stop) => {
+    const el = document.createElement('div');
+    el.className = 'stop-marker';
+    el.textContent = '⚡';
+    const popup = new maplibregl.Popup({ offset: 16 }).setText(`${stop.name} (${stop.kw} kW)`);
+    return new maplibregl.Marker({ element: el }).setLngLat([stop.lon, stop.lat]).setPopup(popup).addTo(map);
+  });
+  if (fit) {
+    const bounds = coords.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(coords[0], coords[0]));
+    map.fitBounds(bounds, { padding: 20 });
   }
-  if (fit) map.fitBounds(line.getBounds(), { padding: [20, 20] });
 }
 
 // Risultato: tutto il testo passa da textContent, perché i nomi delle colonnine vengono da fonti esterne.
@@ -377,6 +418,7 @@ function startNavigation() {
     speedMs: null,
     prevTime: null,
     heading: 0, // rotta in gradi, 0 = nord
+    view3d: false, // vista 2D o 3D con edifici
     prevFix: null,
     panelH: 0,
     learnedFactor: 1, // correzione dei consumi ricavata dalle letture reali
@@ -384,10 +426,9 @@ function startNavigation() {
   };
   $('nav').hidden = false;
   document.body.classList.add('navigating');
-  // controlli Leaflet rimossi in guida: ruoterebbero con la mappa
-  map.zoomControl?.remove();
-  map.attributionControl?.remove();
-  map.dragging.disable();
+  // in guida la mappa non si sposta col dito: si segue la posizione
+  map.dragPan.disable();
+  map.on('click', toggleView3d);
   layoutMap();
   setNavWarn('In attesa del segnale GPS…');
   nav.watchId = navigator.geolocation.watchPosition(onFix, onGpsError, {
@@ -717,63 +758,60 @@ function updateHeading(fix, pos) {
 
 function placeMarker(fix) {
   if (!nav.marker) {
-    nav.marker = L.circleMarker([fix.lat, fix.lon], { radius: 8, color: '#1a73e8', fillOpacity: 1 }).addTo(map);
+    const el = document.createElement('div');
+    el.className = 'user-dot';
+    nav.marker = new maplibregl.Marker({ element: el }).setLngLat([fix.lon, fix.lat]).addTo(map);
   } else {
-    nav.marker.setLatLng([fix.lat, fix.lon]);
+    nav.marker.setLngLat([fix.lon, fix.lat]);
   }
 }
 
-// Vista di guida: il contenitore della mappa è più grande dello schermo e ruota attorno alla freccia,
-// fissa al centro dell'area sopra il pannello. Così la rotazione non lascia angoli vuoti.
+// Il punto di vista è centrato nell'area sopra il pannello: il padding della mappa lo tiene libero.
 function arrowY() {
   return (window.innerHeight - $('nav').offsetHeight) / 2;
 }
 
 function layoutMap() {
   if (!nav) return;
-  const el = map.getContainer();
-  const arrow = $('nav-arrow');
   nav.panelH = $('nav').offsetHeight;
-  if (nav.follow) {
-    const size = Math.ceil(2 * Math.hypot(window.innerWidth / 2, window.innerHeight * 0.75));
-    el.style.width = `${size}px`;
-    el.style.height = `${size}px`;
-    el.style.left = `${window.innerWidth / 2 - size / 2}px`;
-    el.style.top = `${arrowY() - size / 2}px`;
-    arrow.style.top = `${arrowY()}px`;
-  } else {
-    for (const prop of ['width', 'height', 'left', 'top', 'transform']) el.style[prop] = '';
-  }
+  map.setPadding({ top: 0, bottom: nav.panelH, left: 0, right: 0 });
+  const arrow = $('nav-arrow');
+  arrow.style.top = `${arrowY()}px`;
   arrow.hidden = !nav.follow;
-  map.invalidateSize({ pan: false });
+  map.resize();
 }
 
-// Centro sulla posizione e zoom che mostra l'area raggiungibile in 5 minuti alla velocità attuale,
-// con più dettaglio sotto i 30 km/h (rotonde, svincoli). Lo zoom cambia a livelli interi e solo oltre
-// una soglia: niente cambi a ogni fix, niente lampeggi.
+// Vista di guida: centro sulla posizione, zoom in base alla velocità, rotazione nel senso di marcia.
 function followMap(fix, speedMs) {
   if (!nav) return;
   nav.speedMs = speedMs;
   const speedKmh = speedMs != null ? speedMs * 3.6 : DEFAULT_SPEED_KMH;
 
   const target = zoomForRadius(viewRadiusKm(speedKmh), fix.lat, window.innerWidth);
-  let animate = false;
-  if (nav.zoom === null) {
-    nav.zoom = Math.round(target);
-  } else if (Math.abs(target - nav.zoom) >= ZOOM_HYSTERESIS) {
-    const next = Math.round(target);
-    animate = next !== nav.zoom;
-    nav.zoom = next;
-  }
-  map.setView(fix, nav.zoom, { animate });
-  map.getContainer().style.transform = `rotate(${-nav.heading}deg)`;
+  if (nav.zoom === null || Math.abs(target - nav.zoom) >= ZOOM_HYSTERESIS) nav.zoom = Math.round(target);
+  map.easeTo({
+    center: [fix.lon, fix.lat],
+    zoom: nav.zoom,
+    bearing: nav.heading,
+    pitch: nav.view3d ? 60 : 0,
+    duration: 500,
+    essential: true,
+  });
+}
+
+// Tocco sulla mappa in guida: alterna la vista 2D e 3D con gli edifici.
+function toggleView3d() {
+  if (!nav) return;
+  nav.view3d = !nav.view3d;
+  map.setLayoutProperty('buildings-3d', 'visibility', nav.view3d ? 'visible' : 'none');
+  if (nav.follow && nav.lastFix) followMap(nav.lastFix, nav.speedMs);
 }
 
 function toggleFollow() {
   if (!nav) return;
   nav.follow = !nav.follow;
   if (nav.follow) {
-    map.dragging.disable();
+    map.dragPan.disable();
     if (nav.marker) {
       nav.marker.remove();
       nav.marker = null;
@@ -782,10 +820,11 @@ function toggleFollow() {
     layoutMap();
     if (nav.lastFix) followMap(nav.lastFix, nav.speedMs);
   } else {
-    map.dragging.enable();
+    map.dragPan.enable();
+    map.easeTo({ bearing: 0, pitch: 0, duration: 300 });
     layoutMap();
     if (nav.lastFix) {
-      map.setView(nav.lastFix, map.getZoom(), { animate: false });
+      map.jumpTo({ center: [nav.lastFix.lon, nav.lastFix.lat] });
       placeMarker(nav.lastFix);
     }
   }
@@ -807,11 +846,11 @@ function stopNavigation() {
   $('nav-arrow').hidden = true;
   $('nav-turn').hidden = true;
   document.body.classList.remove('navigating');
-  map.dragging.enable();
-  map.zoomControl?.addTo(map);
-  map.attributionControl?.addTo(map);
-  for (const prop of ['width', 'height', 'left', 'top', 'transform']) map.getContainer().style[prop] = '';
-  map.invalidateSize();
+  map.dragPan.enable();
+  map.off('click', toggleView3d);
+  map.setPadding({ top: 0, bottom: 0, left: 0, right: 0 });
+  map.easeTo({ bearing: 0, pitch: 0, duration: 300 });
+  map.setLayoutProperty('buildings-3d', 'visibility', 'none');
   if (trip) renderMap(trip.points, trip.result.stops);
 }
 

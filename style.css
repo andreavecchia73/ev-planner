@@ -130,7 +130,6 @@ dd { margin: 0; font-weight: 600; }
 
 /* Durante la guida la mappa occupa tutto lo schermo, il pannello resta in basso */
 body.navigating #map {
-  transition: transform 0.4s linear; /* rotazione morbida tra un fix GPS e l'altro */
   position: fixed !important; /* Leaflet imposta position: relative inline */
   inset: 0;
   width: 100%;
@@ -176,3 +175,6 @@ body.navigating #map {
 .lane.valid svg { color: var(--accent); }
 
 [hidden] { display: none !important; }
+
+.user-dot { width: 18px; height: 18px; border-radius: 50%; background: #1a73e8; border: 3px solid #fff; box-shadow: 0 0 0 4px rgba(26, 115, 232, 0.25); }
+.stop-marker { width: 30px; height: 30px; border-radius: 50%; background: #fff; display: flex; align-items: center; justify-content: center; font-size: 16px; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35); cursor: pointer; }
