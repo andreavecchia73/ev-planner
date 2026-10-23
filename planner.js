@@ -277,6 +277,8 @@ export async function planTrip({
       arrivalPct,
       departPct,
       chargeMinutes,
+      gridKwh: needKwh / MODEL.chargeEfficiency, // energia prelevata dalla rete
+      usageCost: best.usageCost ?? '',
     });
     soc = departPct;
     pos = best.km;

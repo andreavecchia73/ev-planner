@@ -21,7 +21,7 @@ import {
 const STORAGE_KEY = 'ev-planner-settings';
 const FIELDS = [
   'from', 'to', 'vehicle', 'batteryKwh', 'maxDcKw', 'startPct', 'arriveMinPct', 'chargeToPct',
-  'reservePct', 'tempC', 'ocmKey', 'haUrl', 'haEntity', 'haToken',
+  'reservePct', 'tempC', 'evdcPrice', 'ocmKey', 'haUrl', 'haEntity', 'haToken',
 ];
 // Consumi per tipo di strada in kWh/100 km. Il modello PHEV usa il consumo misto anche per superstrada e centro.
 const VEHICLES = {
@@ -180,6 +180,7 @@ async function fetchChargers(point, radiusKm, key) {
     lat: poi.AddressInfo.Latitude,
     lon: poi.AddressInfo.Longitude,
     name: poi.AddressInfo.Title,
+    usageCost: poi.UsageCost ?? '',
     kw: Math.max(0, ...(poi.Connections ?? []).map((c) => c.PowerKW ?? 0)),
   }));
 }
@@ -285,11 +286,22 @@ function renderMap(points, stops, fit = true) {
 }
 
 // Risultato: tutto il testo passa da textContent, perché i nomi delle colonnine vengono da fonti esterne.
+// Costo totale delle soste; se per qualche colonnina manca il prezzo, il totale è parziale.
+function chargeCostLabel(result) {
+  const costs = result.stops.map(stopCost);
+  if (!costs.length) return '—';
+  const known = costs.filter((c) => c !== null);
+  if (!known.length) return 'prezzo non disponibile';
+  const total = known.reduce((sum, c) => sum + c, 0).toFixed(2);
+  return known.length === costs.length ? `${total} €` : `${total} € (parziale)`;
+}
+
 function renderResult(result) {
   const summary = [
     ['Distanza', `${result.totalKm.toFixed(0)} km`],
     ['Tempo di guida', formatMinutes(result.drivingMinutes)],
     ['Tempo di ricarica', formatMinutes(result.chargeMinutes)],
+    ['Costo ricarica', chargeCostLabel(result)],
     ['Tempo totale', formatMinutes(result.totalMinutes)],
     ['Consumo medio', `${(result.consumptionKwhPerKm * 100).toFixed(1)} kWh/100 km`],
     ['SoC all\'arrivo', `${result.finalPct.toFixed(0)}%`],
@@ -312,10 +324,23 @@ function renderResult(result) {
     li.textContent =
       `${stop.name} · km ${stop.km.toFixed(0)} · ${stop.kw} kW · ` +
       `arrivo ${stop.arrivalPct.toFixed(0)}% → ${stop.departPct.toFixed(0)}% · ` +
-      `${Math.round(stop.chargeMinutes)} min`;
+      `${Math.round(stop.chargeMinutes)} min` +
+      (stopCost(stop) === null ? '' : ` · ${stopCost(stop).toFixed(2)} €`);
     list.append(li);
   }
   $('result').hidden = false;
+}
+
+// Prezzo in €/kWh da un testo come "0,79 €/kWh" o "0.69 EUR per kWh"; null se non c'è.
+function priceFromText(text) {
+  const m = /(\d+(?:[.,]\d+)?)\s*(?:€|EUR)?\s*(?:\/|per)\s*kWh/i.exec(text ?? '');
+  return m ? Number(m[1].replace(',', '.')) : null;
+}
+
+// Costo della ricarica alla colonnina: prezzo della colonnina, altrimenti quello predefinito.
+function stopCost(stop) {
+  const price = priceFromText(stop.usageCost) ?? (Number(trip.form.evdcPrice) || null);
+  return price === null ? null : stop.gridKwh * price;
 }
 
 function formatMinutes(total) {
