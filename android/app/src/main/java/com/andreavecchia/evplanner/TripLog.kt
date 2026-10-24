@@ -161,9 +161,14 @@ object TripLog {
             put("electricKm", round(max(0.0, km - hybridKm)))
             put("socStart", socStart)
             put("socEnd", socEnd)
+            // energia netta dalla batteria, poi quella usata in trazione: si aggiunge ciò che il motore
+            // ha rimesso in batteria, perché quell'energia è stata poi spesa in marcia
+            val engineChargeKwh = engineChargePct / 100 * BATTERY_KWH
+            val tractionKwh = kwh + engineChargeKwh
             put("kwh", round(kwh))
-            put("kwhPer100Km", round(kwh / km * 100))
-            put("engineChargeKwh", round(engineChargePct / 100 * BATTERY_KWH))
+            put("engineChargeKwh", round(engineChargeKwh))
+            put("tractionKwh", round(tractionKwh))
+            put("kwhPer100Km", round(tractionKwh / km * 100))
             put("litres", round(litres))
             put("litresPer100Km", if (litres > 0) round(litres / km * 100) else JSONObject.NULL)
             put("kmPerLitre", if (litres > 0) round(km / litres) else JSONObject.NULL)
