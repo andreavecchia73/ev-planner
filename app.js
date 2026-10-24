@@ -394,7 +394,22 @@ function chargeCostLabel(result) {
   return known.length === costs.length ? `${total} €` : `${total} € (parziale)`;
 }
 
+// Km per tipo di strada, es. "autostrada 120 km · urbana 8 km" (solo i tipi presenti).
+const ROAD_NAMES = { motorway: 'autostrada', expressway: 'extraurbana', urban: 'urbana' };
+function roadKmLabel(totals) {
+  return Object.entries(totals)
+    .filter(([, t]) => t.km > 0.05)
+    .map(([road, t]) => `${ROAD_NAMES[road]} ${t.km.toFixed(1)} km`)
+    .join(' · ');
+}
+function sumRoads(totals, key) {
+  return Object.values(totals).reduce((sum, t) => sum + t[key], 0);
+}
+
 function renderResult(result, traffic = null) {
+  const { electric, petrol } = result.breakdown;
+  const electricKm = sumRoads(electric, 'km');
+  const electricKwh = sumRoads(electric, 'kwh');
   const summary = [
     ['Distanza', `${result.totalKm.toFixed(0)} km`],
     ['Tempo di guida', formatMinutes(result.drivingMinutes)],
@@ -404,6 +419,8 @@ function renderResult(result, traffic = null) {
     ...(result.diagnostics ? [['Colonnine', `viste ${result.diagnostics.seen} · oltre 39 kW ${result.diagnostics.powerOk} · potenza ignota ${result.diagnostics.noPower} · entro ${result.diagnostics.maxOffRouteKm} km ${result.diagnostics.nearRoute} · utili ${result.diagnostics.reachable}`]] : []),
     ['Scelta', result.costs ? `${result.strategy} (elettrico ${result.costs.electric.toFixed(2)} €, benzina ${result.costs.petrol.toFixed(2)} €)` : result.strategy],
     ...(result.petrol ? [['Benzina', `${result.petrol.litres.toFixed(1)} L da km ${result.petrol.fromKm.toFixed(0)} · ${result.petrol.cost.toFixed(2)} €`]] : []),
+    ['Elettrico', `${electricKm.toFixed(1)} km · ${electricKwh.toFixed(2)} kWh a ruota · ${roadKmLabel(electric)}`],
+    ...(petrol ? [['Benzina per tratto', `${sumRoads(petrol, 'litres').toFixed(2)} L · ${roadKmLabel(petrol)}`]] : []),
     ...(traffic ? [['Ritardo traffico', `+${Math.round(traffic.delayMin)} min`]] : []),
     ['Tempo totale', formatMinutes(result.totalMinutes)],
     ['Consumo medio', `${(result.consumptionKwhPerKm * 100).toFixed(1)} kWh/100 km`],

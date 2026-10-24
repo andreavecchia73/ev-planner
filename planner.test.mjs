@@ -322,3 +322,24 @@ test('modalità ibrida: batteria mantenuta al 60%, poi benzina', async () => {
   assert.ok(Math.abs(res.petrol.fromKm - 100) < 0.5, `from ${res.petrol.fromKm}`);
   assert.ok(Math.abs(res.finalPct - 60) < 1e-9);
 });
+
+test('roadTotals: km, kWh e litri per tipo di strada', async () => {
+  const { roadTotals } = await import('./planner.js');
+  const profile = [
+    { from: 0, to: 100, kwh: 20, road: 'motorway' },
+    { from: 100, to: 150, kwh: 7, road: 'expressway' },
+    { from: 150, to: 170, kwh: 2.8, road: 'urban' },
+  ];
+  const l100 = { motorway: 100 / 18, expressway: 100 / 20, urban: 100 / 25 };
+  const t = roadTotals(profile, 0, 170, l100);
+  assert.equal(t.motorway.km, 100);
+  assert.equal(t.expressway.km, 50);
+  assert.equal(t.urban.km, 20);
+  assert.ok(Math.abs(t.motorway.litres - 100 / 18) < 1e-9);
+  assert.ok(Math.abs(t.expressway.litres - 2.5) < 1e-9);
+  assert.ok(Math.abs(t.urban.litres - 0.8) < 1e-9);
+  assert.ok(Math.abs(t.motorway.kwh + t.expressway.kwh + t.urban.kwh - energyBetween(profile, 0, 170)) < 1e-9);
+  // tratto parziale: 50 km di autostrada su 100 km di segmento
+  const part = roadTotals(profile, 50, 100);
+  assert.ok(Math.abs(part.motorway.kwh - 10) < 1e-9);
+});

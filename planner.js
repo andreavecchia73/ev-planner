@@ -204,6 +204,24 @@ export function litresBetween(profile, a, b, l100) {
   return litres;
 }
 
+// Km, kWh (a ruota) e litri per tipo di strada tra due km. Senza l100 i litri restano a zero.
+export function roadTotals(profile, a, b, l100 = null) {
+  const totals = {
+    motorway: { km: 0, kwh: 0, litres: 0 },
+    expressway: { km: 0, kwh: 0, litres: 0 },
+    urban: { km: 0, kwh: 0, litres: 0 },
+  };
+  for (const s of profile) {
+    const overlap = Math.min(b, s.to) - Math.max(a, s.from);
+    if (overlap <= 0) continue;
+    const t = totals[s.road] ?? totals.urban;
+    t.km += overlap;
+    t.kwh += (overlap / (s.to - s.from)) * s.kwh;
+    if (l100) t.litres += overlap * ((l100[s.road] ?? l100.urban) / 100);
+  }
+  return totals;
+}
+
 // Pianifica il viaggio con soste di ricarica greedy: a ogni sosta sceglie la colonnina preferita
 // tra quelle raggiungibili e vicine al percorso. Con fuel la batteria non scende sotto EV_FLOOR_PCT:
 // se la ricarica costa più della benzina sul tratto che copre, la colonnina viene saltata e il resto
@@ -361,8 +379,16 @@ export async function planTrip({
   const chargeMinutes = stops.reduce((sum, s) => sum + s.chargeMinutes, 0);
   const chargeCostEur = stops.reduce((sum, s) => sum + (s.costEur ?? 0), 0);
 
+  // consumi per tipo di strada: elettrico fino al 20% (o fino a destinazione), benzina dopo
+  const electricKm = petrol ? petrol.fromKm : totalKm;
+  const breakdown = {
+    electric: roadTotals(segs, 0, electricKm),
+    petrol: petrol ? roadTotals(segs, petrol.fromKm, totalKm, fuel.l100) : null,
+  };
+
   return {
     totalKm,
+    breakdown,
     drivingMinutes,
     chargeMinutes,
     totalMinutes: drivingMinutes + chargeMinutes,
