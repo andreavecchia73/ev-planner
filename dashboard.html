@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cruscotto consumi</title>
+  <meta name="theme-color" content="#0a7d4f" />
+  <style>
+    :root {
+      --bg: #f5f7f6;
+      --card: #ffffff;
+      --fg: #1d1d1f;
+      --muted: #6e6e73;
+      --border: #e3e6e4;
+      --good: #14a06a;
+      --bad: #e0474c;
+      --flat: #8a8f93;
+      --electric: #0a7d4f;
+      --petrol: #e8892b;
+      --grad-a: #0a7d4f;
+      --grad-b: #37b8a0;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg: #101214;
+        --card: #1a1d20;
+        --fg: #f2f2f4;
+        --muted: #9aa0a6;
+        --border: #2a2e33;
+        --good: #3fd393;
+        --bad: #ff6b7e;
+        --flat: #9aa0a6;
+        --electric: #3fd393;
+        --petrol: #ffb35c;
+      }
+    }
+    :root[data-theme="dark"] {
+      --bg: #101214;
+      --card: #1a1d20;
+      --fg: #f2f2f4;
+      --muted: #9aa0a6;
+      --border: #2a2e33;
+      --good: #3fd393;
+      --bad: #ff6b7e;
+      --flat: #9aa0a6;
+      --electric: #3fd393;
+      --petrol: #ffb35c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      padding: 0 16px 32px;
+    }
+    header {
+      background: linear-gradient(135deg, var(--grad-a), var(--grad-b));
+      color: #fff;
+      margin: 0 -16px 16px;
+      padding: 20px 16px 22px;
+      border-radius: 0 0 22px 22px;
+    }
+    header h1 { margin: 0; font-size: 1.4rem; }
+    header p { margin: 4px 0 0; opacity: 0.9; font-size: 0.9rem; }
+    header a { color: #fff; font-size: 0.9rem; }
+    .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 14px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+    }
+    .label { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .value { font-size: 1.8rem; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+    .unit { font-size: 0.9rem; font-weight: 500; color: var(--muted); margin-left: 4px; }
+    .trend { display: inline-flex; align-items: center; gap: 4px; font-size: 0.85rem; font-weight: 600; margin-top: 6px; }
+    .trend.up { color: var(--bad); }
+    .trend.down { color: var(--good); }
+    .trend.flat { color: var(--flat); }
+    .arrow { font-size: 1rem; line-height: 1; }
+    .section { margin-top: 20px; }
+    .section h2 { font-size: 1.05rem; margin: 0 0 10px; }
+    .bar-legend { display: flex; gap: 12px; flex-wrap: wrap; color: var(--muted); font-size: 0.8rem; margin-top: 6px; }
+    .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+    svg.chart { width: 100%; height: auto; display: block; }
+    svg.chart text { fill: var(--muted); font-size: 15px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    th, td { text-align: right; padding: 8px 3px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    th { color: var(--muted); font-weight: 500; font-size: 0.78rem; }
+    th:first-child, td:first-child { text-align: left; }
+    .empty { color: var(--muted); text-align: center; padding: 32px 8px; }
+    .refuel { color: var(--petrol); font-weight: 600; }
+    .scroll { overflow-x: auto; }
+    .muted { color: var(--muted); font-size: 0.8rem; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Cruscotto consumi</h1>
+    <p id="updated">Viaggi della Jaecoo 7 PHEV</p>
+    <a href="index.html">← Pianificatore</a>
+  </header>
+
+  <main id="app">
+    <div class="empty" id="empty" hidden>
+      Nessun viaggio salvato. Apri la app sul telefono: i viaggi si aggiornano ogni 8 ore.
+    </div>
+
+    <section id="content" hidden>
+      <div class="grid">
+        <div class="card">
+          <div class="label">Ultimo viaggio</div>
+          <div class="value"><span id="lastKm">—</span><span class="unit">km</span></div>
+          <div class="muted" id="lastDate"></div>
+        </div>
+        <div class="card">
+          <div class="label">Elettrico</div>
+          <div class="value"><span id="lastKwh">—</span><span class="unit">kWh/100 km</span></div>
+          <div class="trend" id="kwhTrend"></div>
+        </div>
+        <div class="card">
+          <div class="label">Benzina</div>
+          <div class="value"><span id="lastL">—</span><span class="unit">L/100 km</span></div>
+          <div class="trend" id="lTrend"></div>
+        </div>
+        <div class="card">
+          <div class="label">Totale periodo</div>
+          <div class="value"><span id="totKm">—</span><span class="unit">km</span></div>
+          <div class="muted" id="totSplit"></div>
+        </div>
+      </div>
+
+      <section class="section card">
+        <h2>Consumo elettrico per viaggio</h2>
+        <svg class="chart" id="chartKwh" viewBox="0 0 600 200" role="img" aria-label="kWh/100 km per viaggio"></svg>
+        <div class="bar-legend">
+          <span><span class="dot" style="background: var(--good)"></span>sotto la media</span>
+          <span><span class="dot" style="background: var(--bad)"></span>sopra la media</span>
+          <span><span class="dot" style="background: var(--muted)"></span>media</span>
+        </div>
+      </section>
+
+      <section class="section card">
+        <h2>Consumo a benzina per viaggio</h2>
+        <svg class="chart" id="chartL" viewBox="0 0 600 200" role="img" aria-label="L/100 km per viaggio"></svg>
+        <div class="bar-legend" id="lLegend"></div>
+      </section>
+
+      <section class="section card">
+        <h2>Viaggi</h2>
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Data</th><th>Km</th><th>Elettr.</th><th>kWh/100</th><th>Benzina</th><th>L/100</th><th>km/L</th>
+              </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+        <p class="muted">Le frecce confrontano ogni viaggio con la media dei 10 precedenti: rosso = consumo in aumento, verde = in calo.</p>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const SVG_NS = 'http://www.w3.org/2000/svg';
+    const AVG_WINDOW = 10; // viaggi precedenti usati come riferimento per le frecce
+    const FLAT_PCT = 2; // variazioni sotto questa soglia sono "stabili"
+    const CHART_TRIPS = 20;
+
+    const fmt = (value, digits = 1) =>
+      value === null || value === undefined || Number.isNaN(value)
+        ? '—'
+        : Number(value).toLocaleString('it-IT', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+
+    const dateLabel = (ms) =>
+      new Date(ms).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+    const shortDate = (ms) => new Date(ms).toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' });
+    const timeLabel = (ms) => new Date(ms).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+
+    // Dati dall'app Android (EvBridge.trips); nel browser normale non esistono.
+    function loadTrips() {
+      try {
+        const raw = window.EvBridge?.trips?.();
+        const list = JSON.parse(raw || '[]');
+        return Array.isArray(list) ? list : [];
+      } catch {
+        return [];
+      }
+    }
+
+    const average = (values) => (values.length ? values.reduce((a, b) => a + b, 0) / values.length : null);
+
+    // Confronto di un valore con la media dei viaggi precedenti. Per i consumi, salire è peggio.
+    function trendOf(current, previous) {
+      const avg = average(previous);
+      if (current == null || avg == null || avg === 0) return null;
+      const pct = ((current - avg) / avg) * 100;
+      if (Math.abs(pct) < FLAT_PCT) return { dir: 'flat', pct, avg };
+      return { dir: pct > 0 ? 'up' : 'down', pct, avg };
+    }
+
+    function trendHtml(trend, unit) {
+      if (!trend) return '<span class="muted">nessun confronto</span>';
+      const arrow = trend.dir === 'up' ? '▲' : trend.dir === 'down' ? '▼' : '■';
+      const label = trend.dir === 'flat'
+        ? 'stabile'
+        : `${trend.dir === 'up' ? '+' : ''}${fmt(trend.pct, 1)}% vs media ${fmt(trend.avg, 1)} ${unit}`;
+      return `<span class="arrow">${arrow}</span>${label}`;
+    }
+
+    function setTrend(el, trend, unit) {
+      el.className = `trend ${trend ? trend.dir : 'flat'}`;
+      el.innerHTML = trendHtml(trend, unit);
+    }
+
+    // Grafico a barre: colore in base alla media dei viaggi mostrati, linea tratteggiata sulla media.
+    function drawBars(svg, items, unit) {
+      svg.innerHTML = '';
+      if (items.length === 0) return;
+      const W = 600, H = 200, padL = 36, padB = 26, padT = 12;
+      const max = Math.max(...items.map((i) => i.value)) * 1.15;
+      const avg = average(items.map((i) => i.value));
+      const plotH = H - padB - padT;
+      const slot = (W - padL) / items.length;
+      const barW = Math.max(6, slot * 0.6);
+      const y = (v) => padT + plotH - (v / max) * plotH;
+      const el = (tag, attrs, text) => {
+        const node = document.createElementNS(SVG_NS, tag);
+        for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+        if (text !== undefined) node.textContent = text;
+        svg.appendChild(node);
+        return node;
+      };
+      for (let g = 0; g <= 3; g++) {
+        const v = (max / 1.15) * (g / 3);
+        el('line', { x1: padL, x2: W, y1: y(v), y2: y(v), stroke: 'var(--border)', 'stroke-width': 1 });
+        el('text', { x: 0, y: y(v) + 4 }, fmt(v, 0));
+      }
+      items.forEach((item, i) => {
+        const x = padL + i * slot + (slot - barW) / 2;
+        const color = item.value > avg * (1 + FLAT_PCT / 100) ? 'var(--bad)'
+          : item.value < avg * (1 - FLAT_PCT / 100) ? 'var(--good)' : 'var(--muted)';
+        el('rect', { x, y: y(item.value), width: barW, height: padT + plotH - y(item.value), rx: 4, fill: color, opacity: 0.85 });
+        if (items.length <= 12 || i % 2 === 0) el('text', { x: x + barW / 2, y: H - 8, 'text-anchor': 'middle' }, shortDate(item.ms));
+      });
+      el('line', { x1: padL, x2: W, y1: y(avg), y2: y(avg), stroke: 'var(--muted)', 'stroke-width': 1.5, 'stroke-dasharray': '5 4' });
+    }
+
+    function render(trips) {
+      if (trips.length === 0) {
+        document.getElementById('empty').hidden = false;
+        return;
+      }
+      document.getElementById('content').hidden = false;
+      const last = trips[0];
+      const previous = trips.slice(1, 1 + AVG_WINDOW);
+      const kwhOf = (t) => t.kwhPer100Km;
+      const lOf = (t) => t.litresPer100Km;
+      const prevKwh = previous.map(kwhOf).filter((v) => v != null);
+      const prevL = previous.map(lOf).filter((v) => v != null);
+
+      document.getElementById('lastKm').textContent = fmt(last.km, 1);
+      document.getElementById('lastDate').textContent = dateLabel(last.startMs);
+      document.getElementById('lastKwh').textContent = fmt(kwhOf(last), 1);
+      document.getElementById('lastL').textContent = lOf(last) == null ? '—' : fmt(lOf(last), 1);
+      setTrend(document.getElementById('kwhTrend'), trendOf(kwhOf(last), prevKwh), 'kWh/100 km');
+      setTrend(document.getElementById('lTrend'), trendOf(lOf(last), prevL), 'L/100 km');
+
+      const totalKm = trips.reduce((s, t) => s + t.km, 0);
+      const electricKm = trips.reduce((s, t) => s + t.electricKm, 0);
+      document.getElementById('totKm').textContent = fmt(totalKm, 0);
+      document.getElementById('totSplit').textContent =
+        `${fmt(totalKm ? (electricKm / totalKm) * 100 : 0, 0)}% elettrico · ${trips.length} viaggi`;
+      document.getElementById('updated').textContent = `Aggiornato al viaggio del ${dateLabel(last.endMs)}`;
+
+      const recent = trips.slice(0, CHART_TRIPS).reverse();
+      drawBars(document.getElementById('chartKwh'),
+        recent.filter((t) => t.kwhPer100Km != null).map((t) => ({ ms: t.startMs, value: t.kwhPer100Km })), 'kWh/100 km');
+      const withL = recent.filter((t) => t.litresPer100Km != null);
+      drawBars(document.getElementById('chartL'),
+        withL.map((t) => ({ ms: t.startMs, value: t.litresPer100Km })), 'L/100 km');
+      document.getElementById('lLegend').textContent =
+        withL.length ? '' : 'Nessun viaggio a benzina nel periodo.';
+
+      const rows = document.getElementById('rows');
+      rows.innerHTML = '';
+      trips.forEach((t, i) => {
+        const prior = trips.slice(i + 1, i + 1 + AVG_WINDOW).map(kwhOf).filter((v) => v != null);
+        const trend = trendOf(kwhOf(t), prior);
+        const arrow = !trend ? '' : trend.dir === 'up'
+          ? '<span class="trend up arrow">▲</span> '
+          : trend.dir === 'down' ? '<span class="trend down arrow">▼</span> ' : '<span class="trend flat arrow">■</span> ';
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${shortDate(t.startMs)} ${timeLabel(t.startMs)}${t.refuelled ? ' <span class="refuel">⛽</span>' : ''}</td>
+          <td>${fmt(t.km, 1)}</td>
+          <td>${fmt(t.electricKm, 1)}</td>
+          <td>${arrow}${fmt(kwhOf(t), 1)}</td>
+          <td>${fmt(t.litres, 2)}</td>
+          <td>${fmt(lOf(t), 1)}</td>
+          <td>${fmt(t.kmPerLitre, 1)}</td>`;
+        rows.appendChild(tr);
+      });
+    }
+
+    render(loadTrips());
+  </script>
+</body>
+</html>

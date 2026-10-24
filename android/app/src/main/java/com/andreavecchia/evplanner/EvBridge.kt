@@ -12,6 +12,10 @@ class EvBridge(private val context: Context) {
         TripState.updateFromPlanner(json)
     }
 
+    // Viaggi salvati, dal più recente, per il cruscotto (dashboard.html).
+    @JavascriptInterface
+    fun trips(): String = TripLog.load(context).toString()
+
     // Credenziali di Home Assistant inserite nella pagina: il telefono le salva e avvia la lettura.
     @JavascriptInterface
     fun saveHomeAssistant(json: String) {
