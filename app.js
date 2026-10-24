@@ -20,6 +20,7 @@ import {
 } from './planner.js';
 
 const STORAGE_KEY = 'ev-planner-settings';
+const SETTINGS_VERSION = 2; // alla versione cambiata, batteria e potenza tornano ai valori del modello
 const FIELDS = [
   'from', 'to', 'vehicle', 'batteryKwh', 'maxDcKw', 'startPct', 'chargeToPct', 'petrolMotorway',
   'petrolExpressway', 'petrolUrban', 'petrolPrice',
@@ -99,8 +100,8 @@ function fillForm() {
   for (const field of FIELDS) {
     $(field).value = saved[field] ?? DEFAULTS[field] ?? '';
   }
-  // Prima apertura: i valori di batteria e potenza seguono il modello, non quelli salvati prima.
-  if (!saved.vehicle) applyVehicle(DEFAULTS.vehicle);
+  // Prima apertura o impostazioni di una versione precedente: batteria e potenza tornano al modello.
+  if (saved.version !== SETTINGS_VERSION) applyVehicle(saved.vehicle ?? DEFAULTS.vehicle);
 }
 
 function applyVehicle(key) {
@@ -444,7 +445,7 @@ function formatDistance(km) {
 async function onSubmit(event) {
   event.preventDefault();
   const form = Object.fromEntries(FIELDS.map((f) => [f, $(f).value]));
-  saveSettings(form);
+  saveSettings({ ...form, version: SETTINGS_VERSION });
 
   const button = $('plan');
   button.disabled = true;
