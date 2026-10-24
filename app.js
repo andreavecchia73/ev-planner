@@ -61,6 +61,8 @@ const STOP_MAX_OFFROUTE_KM = 3; // distanza massima della colonnina dal percorso
 const LEARN_MIN_KM = 1; // distanza minima tra due letture per stimare il consumo reale
 const LEARN_MIN_KWH = 0.2; // energia prevista minima per una stima affidabile
 
+const TRIP_KEY = 'ev-planner-trip';
+
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -340,6 +342,7 @@ map.on('load', () => {
     paint: { 'line-color': '#0a7d4f', 'line-width': 6 },
   });
   routeReady = true; // il percorso si disegna anche se il livello degli edifici non c'è
+  if (trip) renderMap(trip.points, trip.result.stops); // viaggio ripristinato prima del caricamento della mappa
   // edifici in 3D: visibili solo nella vista inclinata
   try {
     map.addLayer({
@@ -500,6 +503,7 @@ async function onSubmit(event) {
     const traffic = await fetchTraffic(waypoints[0], waypoints[1], form.tomtomKey.trim()).catch(() => null);
 
     trip = { ...planned, destination: waypoints.at(-1), waypoints, form, traffic };
+    saveTrip();
     renderResult(planned.result, traffic);
     renderMap(planned.points, planned.result.stops);
     $('startNav').hidden = false;
@@ -915,6 +919,7 @@ async function recalculate({ nearestFirst = false } = {}) {
     });
     if (!nav) return; // navigazione terminata durante il calcolo
     trip = { ...planned, destination: trip.destination, waypoints, form: trip.form };
+    saveTrip();
     nav.hint = 0;
     nav.km = 0;
     nav.soc = pct;
@@ -1165,7 +1170,30 @@ function stopNavigation() {
   if (trip) renderMap(trip.points, trip.result.stops);
 }
 
+// Il piano si salva nel browser: se Android chiude la pagina durante il viaggio, si riprende da qui.
+function saveTrip() {
+  try {
+    localStorage.setItem(TRIP_KEY, JSON.stringify(trip));
+  } catch {
+    // archiviazione non disponibile: il piano si perde alla chiusura della pagina
+  }
+}
+
+function restoreTrip() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(TRIP_KEY));
+    if (!saved?.points || !saved.result?.breakdown) return; // piano salvato da una versione precedente: si ripianifica
+    trip = saved;
+    renderResult(trip.result, trip.traffic);
+    $('startNav').hidden = false;
+    setStatus('Viaggio ripristinato. Avvia la navigazione o ripianifica.');
+  } catch {
+    // nessun viaggio salvato o dati non leggibili
+  }
+}
+
 fillForm();
+restoreTrip();
 syncHomeAssistant();
 for (const id of ['haUrl', 'haEntity', 'haToken']) $(id).addEventListener('change', syncHomeAssistant);
 $('trip').addEventListener('submit', onSubmit);
