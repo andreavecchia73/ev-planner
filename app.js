@@ -21,8 +21,8 @@ import {
 
 const STORAGE_KEY = 'ev-planner-settings';
 const FIELDS = [
-  'from', 'to', 'startPct', 'chargeToPct', 'petrolMotorway',
-  'petrolExpressway', 'petrolUrban', 'petrolPrice',
+  'from', 'to', 'startPct', 'chargeToPct', 'kplMotorway',
+  'kplExpressway', 'kplUrban', 'petrolPrice',
   'reservePct', 'tempC', 'evdcPrice', 'ocmKey', 'tomtomKey', 'haUrl', 'haEntity', 'haToken',
   'sheetUrl', 'sheetSecret', 'strategy',
 ];
@@ -37,9 +37,9 @@ const VEHICLE = {
 };
 const DEFAULTS = {
   startPct: 90,
-  petrolMotorway: 18, // L/100 km
-  petrolExpressway: 20,
-  petrolUrban: 24,
+  kplMotorway: 18, // km/L
+  kplExpressway: 20,
+  kplUrban: 25,
   petrolPrice: 2, // €/L, modificabile
   strategy: 'auto',
   chargeToPct: 80,
@@ -202,10 +202,11 @@ function planParams(form, startPct) {
     targetArrivalPct: STOP_TARGET_PCT,
     maxOffRouteKm: STOP_MAX_OFFROUTE_KM,
     fuel: {
+      // consumo a benzina in L/100 km, ricavato dai km/L inseriti nel form
       l100: {
-        motorway: Number(form.petrolMotorway),
-        expressway: Number(form.petrolExpressway),
-        urban: Number(form.petrolUrban),
+        motorway: 100 / Number(form.kplMotorway),
+        expressway: 100 / Number(form.kplExpressway),
+        urban: 100 / Number(form.kplUrban),
       },
       pricePerL: Number(form.petrolPrice),
       chargePrice: (stop) => priceFromText(stop.usageCost) ?? (Number(form.evdcPrice) || null),
