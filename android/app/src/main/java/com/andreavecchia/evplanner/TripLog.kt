@@ -21,6 +21,7 @@ object TripLog {
     private const val WINDOW_MS = 9L * 24 * 3600 * 1000 // il recorder di Home Assistant conserva 10 giorni
     private const val REFRESH_WAIT_MS = 45_000L // tempo perché l'auto risponda al pulsante di aggiornamento
     private const val MIN_TRIP_KM = 0.1
+    private const val ODOMETER_TOLERANCE_KM = 0.5 // l'odometro è in km interi
 
     private const val REFRESH_BUTTON = "button.chery_connect_refresh_full_status"
 
@@ -44,16 +45,25 @@ object TripLog {
         val powerKw: Double get() = (num("voltage") ?: 0.0) * abs(num("current") ?: 0.0) / 1000
     }
 
-    // Sincronizza i viaggi: chiede all'auto i dati completi, legge la storia e aggiorna il file.
-    // Chiamata dal lavoro in background ogni 8 ore; non fa nulla se Home Assistant non è configurato.
+    // Sincronizza i viaggi: l'aggiornamento serve solo a recuperare i viaggi fatti con l'app chiusa.
+    // Se l'odometro è uguale a quello dell'ultimo viaggio salvato non c'è altro da fare. Altrimenti
+    // ricostruisce i viaggi dalla fine dell'ultimo salvato in poi. Non fa nulla se Home Assistant non è configurato.
     fun sync(context: Context) {
         val settings = HaClient.loadSettings(context)
         if (!settings.isComplete) return
         pressRefresh(settings)
         Thread.sleep(REFRESH_WAIT_MS)
         val now = System.currentTimeMillis()
-        val events = fetchHistory(settings, now - WINDOW_MS, now)
-        merge(context, detect(events))
+        val current = fetchOdometer(settings) ?: return
+        val last = load(context).optJSONObject(0)
+        if (last != null && abs(current - last.getDouble("odometerEnd")) < ODOMETER_TOLERANCE_KM) return
+        val from = if (last != null) max(last.getLong("endMs"), now - WINDOW_MS) else now - WINDOW_MS
+        merge(context, detect(fetchHistory(settings, from, now)))
+    }
+
+    private fun fetchOdometer(settings: HaClient.Settings): Double? {
+        val state = JSONObject(request(settings, "/api/states/sensor.chery_connect_odometer", "GET", null))
+        return state.getString("state").toDoubleOrNull()
     }
 
     // Elenco dei viaggi salvati, dal più recente.
@@ -132,6 +142,7 @@ object TripLog {
         return JSONObject().apply {
             put("startMs", start.ms)
             put("endMs", end.ms)
+            put("odometerEnd", end.num("odometer"))
             put("km", round(km))
             put("hybridKm", round(hybridKm))
             put("electricKm", round(max(0.0, km - hybridKm)))
