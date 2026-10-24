@@ -300,8 +300,15 @@ export async function planTrip({
     const searchKm = targetKm !== null && targetKm > pos ? Math.min(targetKm, floorKm) : pos + (floorKm - pos) * 0.85;
     const at = pointAt(points, cum, searchKm);
 
-    const near = await findChargers(at, 25);
-    const list = near.length ? near : await findChargers(at, 60);
+    // colonnine entro 25 km e entro 60 km dal punto di ricerca, senza duplicati
+    const found = [...(await findChargers(at, 25)), ...(await findChargers(at, 60))];
+    const seen = new Set();
+    const list = found.filter((c) => {
+      const key = `${c.lat},${c.lon},${c.name}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
     if (!diagnostics) diagnostics = { ...countCandidates(list, pos, floorKm), maxOffRouteKm };
     let candidates = pick(list, pos, soc, floorKm);
     if (!candidates.length && !fuel) candidates = pick(list, pos, soc, reserveKm);
