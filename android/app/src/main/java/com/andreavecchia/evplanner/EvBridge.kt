@@ -20,6 +20,6 @@ class EvBridge(private val context: Context) {
             context,
             HaClient.Settings(o.optString("url"), o.optString("entity"), o.optString("token")),
         )
-        HaClient.refreshBattery(HaClient.loadSettings(context))
+        HaClient.refreshAll(HaClient.loadSettings(context))
     }
 }

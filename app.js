@@ -24,6 +24,7 @@ const FIELDS = [
   'from', 'to', 'vehicle', 'batteryKwh', 'maxDcKw', 'startPct', 'chargeToPct', 'petrolMotorway',
   'petrolExpressway', 'petrolUrban', 'petrolPrice',
   'reservePct', 'tempC', 'evdcPrice', 'ocmKey', 'tomtomKey', 'haUrl', 'haEntity', 'haToken',
+  'sheetUrl', 'sheetSecret',
 ];
 // Consumi per tipo di strada in kWh/100 km. Il modello PHEV usa il consumo misto anche per superstrada e centro.
 const VEHICLES = {
@@ -57,6 +58,8 @@ const ANNOUNCE_KM = 0.3; // annuncio vocale quando la manovra è a 300 m
 const ZOOM_HYSTERESIS = 0.75; // lo zoom cambia solo se la scala ideale si discosta di questo valore
 const MIN_HEADING_KM = 0.015; // sotto 15 m il rumore del GPS non dice nulla sulla direzione
 const RECALC_COOLDOWN_MS = 60000; // evita ricalcoli ripetuti mentre la carica resta sotto la scorta
+const FUEL_KWH_PER_L = 8.9; // energia contenuta in un litro di benzina (valore standard)
+const RECORD_INTERVAL_MS = 30000; // un campione dei sensori ogni 30 secondi durante il viaggio
 const DEFAULT_SPEED_KMH = 30; // velocità assunta finché il GPS non la fornisce
 const ALTITUDE_STEP_KM = 2; // un campione di altitudine ogni 2 km
 // Dati fissi per la scelta delle soste.
@@ -458,6 +461,7 @@ function startNavigation() {
     km: null, // posizione lungo il percorso, in km
     soc: lastCarPct, // batteria reale da Home Assistant se già disponibile, altrimenti stimata
     socSource: lastCarPct === null ? 'stimata' : 'reale',
+    record: startRecord(),
     announced: null,
     lastFix: null,
     lastRecalc: 0,
@@ -519,6 +523,7 @@ function onFix(pos) {
   if (!nav.anchor) nav.anchor = { km: nav.km, pct: nav.soc };
 
   const speedMs = speedFor(fix, pos);
+  recordSample();
   updateHeading(fix, pos);
   $('nav-gps').textContent = `Precisione GPS ±${Math.round(pos.coords.accuracy)} m · © OpenStreetMap`;
   if (nav.follow) followMap(fix, speedMs);
@@ -559,6 +564,12 @@ function pushToCar(state) {
     // bridge non disponibile
   }
 }
+
+// Sensori dell'auto inviati dall'app Android ogni 30 secondi (null se non disponibili).
+let carState = null;
+window.evSetCar = (car) => {
+  carState = { ...car, at: Date.now() };
+};
 
 // Batteria letta da Home Assistant (app Android, ogni 2 minuti): riallinea la stima e ripianifica le soste.
 // Confronta l'energia reale (calo di batteria) con quella prevista dal profilo, e corregge i consumi.
@@ -907,8 +918,117 @@ function toggleFollow() {
   $('recenter').textContent = nav.follow ? 'Vista libera' : 'Segui';
 }
 
+// --- Storico dei viaggi -----------------------------------------------------
+
+function startRecord() {
+  return {
+    startedAt: new Date().toISOString(),
+    from: trip.form.from,
+    to: trip.form.to,
+    plannedKwh100: trip.result.consumptionKwhPerKm * 100,
+    plannedMinutes: trip.result.totalMinutes,
+    stops: trip.result.stops.length,
+    chargeCostEur: trip.result.chargeCostEur,
+    samples: [],
+  };
+}
+
+// Campione dei sensori dell'auto e del piano, con lo stesso intervallo per tutto il viaggio.
+function recordSample() {
+  const rec = nav?.record;
+  if (!rec || nav.km === null) return;
+  const now = Date.now();
+  if (rec.samples.length && now - rec.samples.at(-1).t < RECORD_INTERVAL_MS) return;
+  const car = carState ?? {};
+  rec.samples.push({
+    t: now,
+    km: nav.km,
+    soc: nav.soc,
+    odo: car.odometerKm ?? null,
+    fuelL: car.fuelL ?? null,
+    engineOn: car.engineOn ?? null,
+    currentA: car.currentA ?? null,
+    voltageV: car.voltageV ?? null,
+  });
+}
+
+// Energia delle batteria dalla tensione e dalla corrente (positiva in scarica, negativa in carica).
+function batteryKwhFromCurrent(samples) {
+  let kwh = 0;
+  for (let i = 1; i < samples.length; i++) {
+    const a = samples[i - 1];
+    const b = samples[i];
+    if (a.voltageV == null || b.voltageV == null || a.currentA == null || b.currentA == null) continue;
+    const powerKw = ((a.voltageV * a.currentA + b.voltageV * b.currentA) / 2) / 1000;
+    kwh += powerKw * ((b.t - a.t) / 3600000);
+  }
+  return kwh;
+}
+
+// Riepilogo del viaggio con i consumi reali. E ruote = benzina + batteria netta − ricarica alle colonnine.
+function tripSummary(rec) {
+  const first = rec.samples[0];
+  const last = rec.samples.at(-1);
+  const batteryKwh = Number(trip.form.batteryKwh);
+  const odoKm = first.odo != null && last.odo != null ? last.odo - first.odo : null;
+  const km = odoKm ?? last.km - first.km;
+  const litres = first.fuelL != null && last.fuelL != null ? first.fuelL - last.fuelL : 0;
+  const fuelKwh = litres * FUEL_KWH_PER_L;
+  const netBatteryKwh = batteryKwhFromCurrent(rec.samples);
+  // ricarica alle colonnine prelevata dalla rete: stimata dalle soste passate durante il viaggio
+  const gridKwh = trip.result.stops
+    .filter((s) => s.km <= last.km + first.km + 0.5 && s.gridKwh)
+    .reduce((sum, s) => sum + s.gridKwh, 0);
+  const wheelKwh = fuelKwh + netBatteryKwh - gridKwh;
+  const engineMin = rec.samples.reduce((sum, s, i) => {
+    if (i === 0 || !rec.samples[i - 1].engineOn) return sum;
+    return sum + (s.t - rec.samples[i - 1].t) / 60000;
+  }, 0);
+  return {
+    'data inizio': rec.startedAt,
+    da: rec.from,
+    a: rec.to,
+    'km totali': round(km, 1),
+    'km percorso': round(last.km, 1),
+    'soc inizio %': first.soc != null ? round(first.soc, 0) : '',
+    'soc fine %': last.soc != null ? round(last.soc, 0) : '',
+    'benzina usata L': round(litres, 2),
+    'motore acceso min': round(engineMin, 1),
+    'batteria netta kWh': round(netBatteryKwh, 2),
+    'ricarica rete kWh stimata': round(gridKwh, 2),
+    'energia ruote kWh': round(wheelKwh, 2),
+    'consumo reale kWh/100km': km > 0 ? round((wheelKwh / km) * 100, 2) : '',
+    'consumo previsto kWh/100km': round(rec.plannedKwh100, 2),
+    'tempo previsto min': round(rec.plannedMinutes, 0),
+    soste: rec.stops,
+    'costo ricarica €': rec.chargeCostEur != null ? round(rec.chargeCostEur, 2) : '',
+    'batteria kWh': batteryKwh,
+  };
+}
+
+function round(value, digits) {
+  const f = 10 ** digits;
+  return Math.round(value * f) / f;
+}
+
+// Invio del riepilogo al foglio Google (Apps Script). Senza indirizzo non fa nulla.
+function finishRecord() {
+  const rec = nav?.record;
+  if (!rec || rec.samples.length < 2) return;
+  const url = trip.form.sheetUrl.trim();
+  if (!url) return;
+  const row = tripSummary(rec);
+  fetch(url, {
+    method: 'POST',
+    mode: 'no-cors',
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify({ secret: trip.form.sheetSecret.trim(), row }),
+  }).catch(() => {});
+}
+
 function stopNavigation() {
   if (!nav) return;
+  finishRecord();
   navigator.geolocation.clearWatch(nav.watchId);
   nav.wakeLock?.release().catch(() => {});
   if (nav.marker) nav.marker.remove();

@@ -29,8 +29,10 @@ class MainActivity : ComponentActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private val batteryPoll = object : Runnable {
         override fun run() {
-            HaClient.refreshBattery(HaClient.loadSettings(this@MainActivity))
-            handler.postDelayed(this, BATTERY_POLL_MS)
+            HaClient.refreshAll(HaClient.loadSettings(this@MainActivity)) { json ->
+                runOnUiThread { pushCarToPlanner(json) }
+            }
+            handler.postDelayed(this, POLL_MS)
         }
     }
 
@@ -79,13 +81,24 @@ class MainActivity : ComponentActivity() {
     }
 
     // La batteria letta da Home Assistant riallinea la stima della pagina, che ripianifica le soste.
+    // La batteria riallinea il piano al massimo ogni 2 minuti, per non ricalcolare a ogni lettura.
+    private var lastBatteryPush = 0L
     private fun pushBatteryToPlanner() {
+        val now = System.currentTimeMillis()
         val pct = TripState.snapshot().batteryPct ?: return
+        if (now - lastBatteryPush < BATTERY_PUSH_MS) return
+        lastBatteryPush = now
         web.evaluateJavascript("window.evSetBattery && window.evSetBattery($pct);", null)
+    }
+
+    // Valori dei sensori dell'auto: la pagina li usa per lo storico dei viaggi.
+    private fun pushCarToPlanner(json: String) {
+        web.evaluateJavascript("window.evSetCar && window.evSetCar($json);", null)
     }
 
     companion object {
         private const val PLANNER_URL = "https://andreavecchia73.github.io/ev-planner/"
-        private const val BATTERY_POLL_MS = 120_000L
+        private const val POLL_MS = 30_000L
+        private const val BATTERY_PUSH_MS = 120_000L
     }
 }
