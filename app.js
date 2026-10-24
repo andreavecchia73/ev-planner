@@ -1,4 +1,5 @@
 import {
+  EV_FLOOR_PCT,
   MODEL,
   laneAngle,
   maneuverKind,
@@ -20,7 +21,8 @@ import {
 
 const STORAGE_KEY = 'ev-planner-settings';
 const FIELDS = [
-  'from', 'to', 'vehicle', 'batteryKwh', 'maxDcKw', 'startPct', 'arriveMinPct', 'chargeToPct',
+  'from', 'to', 'vehicle', 'batteryKwh', 'maxDcKw', 'startPct', 'chargeToPct', 'petrolMotorway',
+  'petrolExpressway', 'petrolUrban', 'petrolPrice',
   'reservePct', 'tempC', 'evdcPrice', 'ocmKey', 'tomtomKey', 'haUrl', 'haEntity', 'haToken',
 ];
 // Consumi per tipo di strada in kWh/100 km. Il modello PHEV usa il consumo misto anche per superstrada e centro.
@@ -43,7 +45,10 @@ const DEFAULTS = {
   batteryKwh: 18,
   maxDcKw: 40,
   startPct: 90,
-  arriveMinPct: 10,
+  petrolMotorway: 18, // L/100 km
+  petrolExpressway: 20,
+  petrolUrban: 24,
+  petrolPrice: 2, // €/L, modificabile
   chargeToPct: 80,
   reservePct: 5,
   tempC: 15,
@@ -57,7 +62,6 @@ const ALTITUDE_STEP_KM = 2; // un campione di altitudine ogni 2 km
 // Dati fissi per la scelta delle soste.
 const STOP_TARGET_PCT = 20; // carica di arrivo alla colonnina da privilegiare
 const STOP_MAX_OFFROUTE_KM = 3; // distanza massima della colonnina dal percorso
-const STOP_ARRIVAL_TOLERANCE_PCT = 10; // la carica di arrivo può scendere fino a 10 punti sotto il valore scelto
 const LEARN_MIN_KM = 1; // distanza minima tra due letture per stimare il consumo reale
 const LEARN_MIN_KWH = 0.2; // energia prevista minima per una stima affidabile
 
@@ -209,12 +213,19 @@ function planParams(form, startPct) {
     },
     conditions: { tempC: Number(form.tempC) },
     startPct,
-    arriveMinPct: Number(form.arriveMinPct),
     chargeToPct: Number(form.chargeToPct),
     reservePct: Number(form.reservePct),
     targetArrivalPct: STOP_TARGET_PCT,
     maxOffRouteKm: STOP_MAX_OFFROUTE_KM,
-    minArrivalPct: STOP_TARGET_PCT - STOP_ARRIVAL_TOLERANCE_PCT,
+    fuel: {
+      l100: {
+        motorway: Number(form.petrolMotorway),
+        expressway: Number(form.petrolExpressway),
+        urban: Number(form.petrolUrban),
+      },
+      pricePerL: Number(form.petrolPrice),
+      chargePrice: (stop) => priceFromText(stop.usageCost) ?? (Number(form.evdcPrice) || null),
+    },
     findChargers: (point, radiusKm) => fetchChargers(point, radiusKm, form.ocmKey.trim()),
   };
 }
@@ -317,6 +328,8 @@ function renderResult(result, traffic = null) {
     ['Tempo di guida', formatMinutes(result.drivingMinutes)],
     ['Tempo di ricarica', formatMinutes(result.chargeMinutes)],
     ['Costo ricarica', chargeCostLabel(result)],
+    ['Costo totale', `${result.totalCostEur.toFixed(2)} €`],
+    ...(result.petrol ? [['Benzina', `${result.petrol.litres.toFixed(1)} L da km ${result.petrol.fromKm.toFixed(0)} · ${result.petrol.cost.toFixed(2)} €`]] : []),
     ...(traffic ? [['Ritardo traffico', `+${Math.round(traffic.delayMin)} min`]] : []),
     ['Tempo totale', formatMinutes(result.totalMinutes)],
     ['Consumo medio', `${(result.consumptionKwhPerKm * 100).toFixed(1)} kWh/100 km`],
@@ -355,8 +368,7 @@ function priceFromText(text) {
 
 // Costo della ricarica alla colonnina: prezzo della colonnina, altrimenti quello predefinito.
 function stopCost(stop) {
-  const price = priceFromText(stop.usageCost) ?? (Number(trip.form.evdcPrice) || null);
-  return price === null ? null : stop.gridKwh * price;
+  return stop.costEur ?? null;
 }
 
 function formatMinutes(total) {
@@ -683,7 +695,6 @@ function refresh() {
   const km = nav.km;
   const totalKm = trip.cum.at(-1);
   const socAt = (targetKm) => nav.soc - pctBetween(km, targetKm);
-  const reserve = Number(trip.form.reservePct);
 
   const step = nextAhead(trip.steps, km);
   const isLastStep = step && step === trip.steps.at(-1);
@@ -710,6 +721,7 @@ function refresh() {
     ['Prossima tappa', stop ? `${formatDistance(stop.km - km)} · ${formatMinutes(stopMinutes)}` : 'nessuna'],
     ['Arrivo', `${formatDistance(remainingKm)} · ${formatMinutes(minutes)}`],
     ['Carica alla tappa', stop ? stopChargeLabel(socAt(stop.km), stop.kw) : '—'],
+    ...(trip.result.petrol ? [['Benzina', `da km ${trip.result.petrol.fromKm.toFixed(0)} · ${trip.result.petrol.litres.toFixed(1)} L`]] : []),
   ];
   const dash = $('nav-dash');
   dash.replaceChildren();
@@ -749,8 +761,7 @@ function refresh() {
   }
 
   // Carica prevista sotto la scorta alla prossima tappa (o all'arrivo, se non ci sono tappe).
-  const socAtTarget = stop ? socAt(stop.km) : socAt(totalKm);
-  if (socAtTarget < reserve && !nav.busy && Date.now() - nav.lastRecalc > RECALC_COOLDOWN_MS) {
+  if (stop && socAt(stop.km) < EV_FLOOR_PCT && !nav.busy && Date.now() - nav.lastRecalc > RECALC_COOLDOWN_MS) {
     recalculate({ nearestFirst: true });
   }
 }

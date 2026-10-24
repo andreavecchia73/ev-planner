@@ -253,3 +253,36 @@ test('svolte: tipo di icona e angolo delle corsie', () => {
   assert.equal(laneAngle(['slight_left']), -45);
   assert.equal(laneAngle([]), 0);
 });
+
+test('benzina: ricarica più cara della benzina, si prosegue a benzina dal 20%', async () => {
+  const fuel = (price) => ({
+    l100: { motorway: 18, expressway: 20, urban: 24 },
+    pricePerL: 2,
+    chargePrice: () => price,
+  });
+  const profile = [{ from: 0, to: 300, kwh: 60, minutes: 180, road: 'motorway' }]; // 0,2 kWh/km
+  const run = (price) => planTrip({
+    points: line(300),
+    profile,
+    vehicle: { batteryKwh: 50, maxDcKw: 100 },
+    conditions: { tempC: 20 },
+    startPct: 100,
+    chargeToPct: 80,
+    reservePct: 5,
+    fuel: fuel(price),
+    findChargers: async () => [
+      { ...at(100), name: 'Colonnina 100', kw: 150 },
+      { ...at(240), name: 'Colonnina 240', kw: 150 },
+    ],
+  });
+  const cheap = await run(1.0);
+  assert.equal(cheap.stops.length, 2);
+  assert.equal(cheap.petrol, null);
+
+  const dear = await run(2.5);
+  assert.equal(dear.stops.length, 0);
+  assert.ok(dear.petrol !== null);
+  assert.ok(Math.abs(dear.petrol.fromKm - 200) < 0.5, `from ${dear.petrol.fromKm}`);
+  assert.ok(Math.abs(dear.petrol.litres - 18) < 1e-3, `litres ${dear.petrol.litres}`);
+  assert.ok(Math.abs(dear.finalPct - 20) < 1e-9);
+});
