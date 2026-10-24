@@ -292,12 +292,23 @@ async function planRoute(from, to, form, startPct, opts = {}) {
 // Mappa vettoriale (MapLibre): in guida si alterna la vista 2D e 3D con edifici toccando la mappa.
 const EMPTY_LINE = { type: 'FeatureCollection', features: [] };
 const ROUTE_SOURCE = 'route';
-const map = new maplibregl.Map({
-  container: 'map',
-  style: 'https://tiles.openfreemap.org/styles/liberty',
-  center: [9, 45],
-  zoom: 6,
-});
+// Se la libreria della mappa non si carica, il pianificatore funziona lo stesso senza mappa.
+function fakeMap() {
+  const handler = {
+    get: (target, prop) => (prop === 'then' ? undefined : fake),
+    apply: () => fake,
+  };
+  const fake = new Proxy(function () {}, handler);
+  return fake;
+}
+const map = window.maplibregl
+  ? new maplibregl.Map({
+      container: 'map',
+      style: 'https://tiles.openfreemap.org/styles/liberty',
+      center: [9, 45],
+      zoom: 6,
+    })
+  : fakeMap();
 let routeReady = false;
 let stopMarkers = [];
 
@@ -885,6 +896,7 @@ function updateHeading(fix, pos) {
 }
 
 function placeMarker(fix) {
+  if (!window.maplibregl) return;
   if (!nav.marker) {
     const el = document.createElement('div');
     el.className = 'user-dot';
