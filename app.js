@@ -261,7 +261,8 @@ async function decideStrategy(route, form, startPct, opts = {}) {
     const plan = await planWith(route, form, startPct, { ...opts, mode: 'hybrid' });
     return { ...plan, strategy: 'ibrida (batteria al 60%)', costs: null };
   }
-  const electric = await planWith(route, form, startPct, { ...opts, mode: 'auto' });
+  // alternativa elettrica: ricarica a tutte le colonnine utili, indipendente dai consumi a benzina
+  const electric = await planWith(route, form, startPct, { ...opts, mode: 'electric' });
   const petrol = await planWith(route, form, startPct, { ...opts, mode: 'petrol20' });
   const unknownPrice = electric.result.stops.some((st) => st.priceEurKwh === null);
   const electricCost = electric.result.totalCostEur;
