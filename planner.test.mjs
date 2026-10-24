@@ -303,3 +303,22 @@ test('benzina senza soste: nessuna colonnina e carburante dal 20% in poi', async
   assert.equal(res.stops.length, 0);
   assert.ok(Math.abs(res.petrol.fromKm - 200) < 0.5);
 });
+
+test('modalità ibrida: batteria mantenuta al 60%, poi benzina', async () => {
+  const res = await planTrip({
+    points: line(300),
+    profile: [{ from: 0, to: 300, kwh: 60, minutes: 180, road: 'motorway' }],
+    vehicle: { batteryKwh: 50, maxDcKw: 100 },
+    conditions: { tempC: 20 },
+    startPct: 100,
+    chargeToPct: 80,
+    reservePct: 5,
+    fuel: { l100: { motorway: 18, expressway: 20, urban: 24 }, pricePerL: 2, chargePrice: () => 1, evFloorPct: 60 },
+    noCharging: true,
+    findChargers: async () => [],
+  });
+  // da 100% a 60% sono 20 kWh, a 0,2 kWh/km: 100 km; poi 200 km a benzina
+  assert.equal(res.stops.length, 0);
+  assert.ok(Math.abs(res.petrol.fromKm - 100) < 0.5, `from ${res.petrol.fromKm}`);
+  assert.ok(Math.abs(res.finalPct - 60) < 1e-9);
+});

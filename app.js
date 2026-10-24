@@ -24,7 +24,7 @@ const FIELDS = [
   'from', 'to', 'vehicle', 'batteryKwh', 'maxDcKw', 'startPct', 'chargeToPct', 'petrolMotorway',
   'petrolExpressway', 'petrolUrban', 'petrolPrice',
   'reservePct', 'tempC', 'evdcPrice', 'ocmKey', 'tomtomKey', 'haUrl', 'haEntity', 'haToken',
-  'sheetUrl', 'sheetSecret',
+  'sheetUrl', 'sheetSecret', 'strategy',
 ];
 // Consumi per tipo di strada in kWh/100 km. Il modello PHEV usa il consumo misto anche per superstrada e centro.
 const VEHICLES = {
@@ -50,6 +50,7 @@ const DEFAULTS = {
   petrolExpressway: 20,
   petrolUrban: 24,
   petrolPrice: 2, // €/L, modificabile
+  strategy: 'auto',
   chargeToPct: 80,
   reservePct: 5,
   tempC: 15,
@@ -241,8 +242,10 @@ async function routeData(from, to) {
   return { points, steps, cum, altitudeAt };
 }
 
-// Piano con soste (noCharging: solo batteria fino al 20%, poi benzina).
-async function planWith(route, form, startPct, { nearestFirst = false, learnedFactor = 1, noCharging = false } = {}) {
+// Piano per modalità: auto (ricarica se conviene), petrol20 (benzina dal 20%), electric (ricarica sempre),
+// hybrid (motore acceso, batteria mantenuta al 60%).
+const HYBRID_FLOOR_PCT = 60;
+async function planWith(route, form, startPct, { nearestFirst = false, learnedFactor = 1, mode = 'auto' } = {}) {
   const rates = (VEHICLES[form.vehicle] ?? VEHICLES[DEFAULTS.vehicle]).rates;
   const totalKm = route.cum.at(-1);
   const profile = buildProfile(route.steps, {
@@ -252,30 +255,42 @@ async function planWith(route, form, startPct, { nearestFirst = false, learnedFa
     rates,
     learnedFactor,
   });
+  const base = planParams(form, startPct);
+  const evFloorPct = mode === 'hybrid' ? HYBRID_FLOOR_PCT : EV_FLOOR_PCT;
   const result = await planTrip({
     points: route.points,
     profile,
     nearestFirst,
-    noCharging,
-    ...planParams(form, startPct),
+    noCharging: mode === 'hybrid' || mode === 'petrol20',
+    forceCharging: mode === 'electric',
+    ...base,
+    fuel: { ...base.fuel, evFloorPct },
   });
   return { result, profile };
 }
 
-// Scelta prima della pianificazione: elettrico con le soste oppure benzina dal 20%. Vince il costo totale più basso.
+// Strategia scelta nel form. Automatica: confronta il costo totale di elettrico e benzina dal 20%.
+// Ricarica di emergenza (scorta): sempre elettrico con le colonnine più vicine.
 async function decideStrategy(route, form, startPct, opts = {}) {
-  const electric = await planWith(route, form, startPct, opts);
-  // ricarica di emergenza (scorta): si usano comunque le colonnine
-  if (opts.nearestFirst) return { ...electric, strategy: 'elettrico', costs: null };
-  const petrol = await planWith(route, form, startPct, { ...opts, noCharging: true });
+  const choice = opts.nearestFirst ? 'electric' : (form.strategy ?? 'auto');
+  if (choice === 'electric') {
+    const plan = await planWith(route, form, startPct, { ...opts, mode: 'electric' });
+    return { ...plan, strategy: 'elettrica (ricarica fino al 20%)', costs: null };
+  }
+  if (choice === 'hybrid') {
+    const plan = await planWith(route, form, startPct, { ...opts, mode: 'hybrid' });
+    return { ...plan, strategy: 'ibrida (batteria al 60%)', costs: null };
+  }
+  const electric = await planWith(route, form, startPct, { ...opts, mode: 'auto' });
+  const petrol = await planWith(route, form, startPct, { ...opts, mode: 'petrol20' });
   const unknownPrice = electric.result.stops.some((st) => st.priceEurKwh === null);
   const electricCost = electric.result.totalCostEur;
   const petrolCost = petrol.result.totalCostEur;
   const useElectric = unknownPrice || electricCost <= petrolCost;
   const costs = { electric: electricCost, petrol: petrolCost };
   return useElectric
-    ? { ...electric, strategy: 'elettrico', costs }
-    : { ...petrol, strategy: 'benzina dal 20%', costs };
+    ? { ...electric, strategy: 'automatica: elettrico', costs }
+    : { ...petrol, strategy: 'automatica: benzina dal 20%', costs };
 }
 
 // Percorso da un punto a un altro, con la strategia scelta: profilo, soste, costi.

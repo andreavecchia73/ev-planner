@@ -224,7 +224,8 @@ export async function planTrip({
   maxOffRouteKm = 5, // distanza massima della colonnina dal percorso
   maxStops = 15,
   fuel = null,
-  noCharging = false, // nessuna sosta: tutto il viaggio con la batteria fino al 20%, poi benzina
+  noCharging = false, // nessuna sosta: tutto il viaggio con la batteria fino alla soglia, poi benzina
+  forceCharging = false, // ricarica alle colonnine anche se costa più della benzina
 }) {
   const cum = cumulativeKm(points);
   const totalKm = cum[cum.length - 1];
@@ -233,7 +234,7 @@ export async function planTrip({
   const pctBetween = (a, b) => (energyBetween(segs, a, b) / battery) * 100;
   const reachFrom = (pos, floorPct, fromPct) =>
     rangeKm(segs, pos, (Math.max(0, fromPct - floorPct) / 100) * battery, totalKm);
-  const floorPct = () => (fuel ? EV_FLOOR_PCT : arriveMinPct);
+  const floorPct = () => (fuel ? (fuel.evFloorPct ?? EV_FLOOR_PCT) : (arriveMinPct ?? EV_FLOOR_PCT));
   const reachFloor = (pos, soc) => reachFrom(pos, floorPct(), soc);
 
   // Colonnine oltre MODEL.minChargerKw, raggiungibili entro reachKm e vicine al percorso, in ordine di preferenza.
@@ -255,7 +256,7 @@ export async function planTrip({
 
   // Conviene ricaricare alla colonnina c? Confronta il costo elettrico con quello della benzina sul tratto coperto.
   const worthCharging = (c) => {
-    if (!fuel) return true;
+    if (!fuel || forceCharging) return true;
     const price = fuel.chargePrice(c);
     if (price === null || price === undefined) return true; // prezzo ignoto: si ricarica
     const end = Math.min(totalKm, reachFrom(c.km, EV_FLOOR_PCT, chargeToPct));
@@ -326,7 +327,7 @@ export async function planTrip({
     const fromKm = reachFloor(pos, soc);
     const litres = litresBetween(segs, fromKm, totalKm, fuel.l100);
     petrol = { fromKm, km: totalKm - fromKm, litres, cost: litres * fuel.pricePerL };
-    finalPct = EV_FLOOR_PCT;
+    finalPct = fuel.evFloorPct ?? EV_FLOOR_PCT;
   } else {
     finalPct = soc - pctBetween(pos, totalKm);
   }

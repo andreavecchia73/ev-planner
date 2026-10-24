@@ -44,6 +44,13 @@
 
       <fieldset>
         <legend>Benzina (tratti senza ricarica conveniente)</legend>
+        <label>Strategia
+          <select id="strategy">
+            <option value="auto">Automatica (costo più basso)</option>
+            <option value="electric">Elettrica: ricarica fino al 20%</option>
+            <option value="hybrid">Ibrida: motore acceso, batteria al 60%</option>
+          </select>
+        </label>
         <label>Consumo autostrada (L/100 km) <input id="petrolMotorway" type="number" step="any" min="1" /></label>
         <label>Consumo extraurbana (L/100 km) <input id="petrolExpressway" type="number" step="any" min="1" /></label>
         <label>Consumo urbana (L/100 km) <input id="petrolUrban" type="number" step="any" min="1" /></label>
