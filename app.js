@@ -270,6 +270,9 @@ async function decideStrategy(route, form, startPct, opts = {}) {
   const petrolCost = petrol.result.totalCostEur;
   const useElectric = unknownPrice || electricCost <= petrolCost;
   const costs = { electric: electricCost, petrol: petrolCost };
+  // nessuna colonnina utile: l'elettrico si ferma al 20% e il resto è a benzina
+  const noStops = electric.result.stops.length === 0 && electric.result.petrol !== null;
+  if (noStops) return { ...petrol, strategy: 'nessuna colonnina utile: benzina dal 20%', costs };
   return useElectric
     ? { ...electric, strategy: 'automatica: elettrico', costs }
     : { ...petrol, strategy: 'automatica: benzina dal 20%', costs };
