@@ -267,12 +267,13 @@ export async function planTrip({
 
   // conteggio delle colonnine trovate, per capire perché non ne vengono scelte
   const countCandidates = (list, pos, reachKm) => {
-    const counts = { seen: list.length, powerOk: 0, nearRoute: 0, reachable: 0 };
+    const counts = { seen: list.length, powerOk: 0, noPower: 0, nearRoute: 0, reachable: 0 };
     for (const c of list) {
       const idx = nearestIndex(points, c);
       const km = cum[idx];
       const off = haversineKm(points[idx], c);
       const powerOk = (c.kw ?? 0) > MODEL.minChargerKw;
+      if (!c.kw) counts.noPower++; // potenza non indicata dalla fonte: non può essere scelta
       if (powerOk) counts.powerOk++;
       if (off <= maxOffRouteKm) counts.nearRoute++;
       if (powerOk && off <= maxOffRouteKm && km > pos && km <= reachKm) counts.reachable++;

@@ -389,7 +389,7 @@ function renderResult(result, traffic = null) {
     ['Tempo di ricarica', formatMinutes(result.chargeMinutes)],
     ['Costo ricarica', chargeCostLabel(result)],
     ['Costo totale', `${result.totalCostEur.toFixed(2)} €`],
-    ...(result.diagnostics ? [['Colonnine', `viste ${result.diagnostics.seen} · oltre 39 kW ${result.diagnostics.powerOk} · entro ${result.diagnostics.maxOffRouteKm} km ${result.diagnostics.nearRoute} · utili ${result.diagnostics.reachable}`]] : []),
+    ...(result.diagnostics ? [['Colonnine', `viste ${result.diagnostics.seen} · oltre 39 kW ${result.diagnostics.powerOk} · potenza ignota ${result.diagnostics.noPower} · entro ${result.diagnostics.maxOffRouteKm} km ${result.diagnostics.nearRoute} · utili ${result.diagnostics.reachable}`]] : []),
     ['Scelta', result.costs ? `${result.strategy} (elettrico ${result.costs.electric.toFixed(2)} €, benzina ${result.costs.petrol.toFixed(2)} €)` : result.strategy],
     ...(result.petrol ? [['Benzina', `${result.petrol.litres.toFixed(1)} L da km ${result.petrol.fromKm.toFixed(0)} · ${result.petrol.cost.toFixed(2)} €`]] : []),
     ...(traffic ? [['Ritardo traffico', `+${Math.round(traffic.delayMin)} min`]] : []),
