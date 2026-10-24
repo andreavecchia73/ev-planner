@@ -20,32 +20,22 @@ import {
 } from './planner.js';
 
 const STORAGE_KEY = 'ev-planner-settings';
-const SETTINGS_VERSION = 2; // alla versione cambiata, batteria e potenza tornano ai valori del modello
 const FIELDS = [
-  'from', 'to', 'vehicle', 'batteryKwh', 'maxDcKw', 'startPct', 'chargeToPct', 'petrolMotorway',
+  'from', 'to', 'startPct', 'chargeToPct', 'petrolMotorway',
   'petrolExpressway', 'petrolUrban', 'petrolPrice',
   'reservePct', 'tempC', 'evdcPrice', 'ocmKey', 'tomtomKey', 'haUrl', 'haEntity', 'haToken',
   'sheetUrl', 'sheetSecret', 'strategy',
 ];
 // Consumi per tipo di strada in kWh/100 km. Il modello PHEV usa il consumo misto anche per superstrada e centro.
-const VEHICLES = {
-  phev: {
-    label: 'Jaecoo 7 PHEV',
-    batteryKwh: 18,
-    maxDcKw: 40,
-    rates: { motorway: 20, expressway: 14, urban: 14 },
-  },
-  proace: {
-    label: 'Toyota Proace City Electric',
-    batteryKwh: 50,
-    maxDcKw: 100, // da verificare sulla scheda tecnica
-    rates: { motorway: 22, expressway: 18, urban: 15 },
-  },
-};
-const DEFAULTS = {
-  vehicle: 'phev',
+// Dati fissi del veicolo: Jaecoo 7 PHEV. Batteria e ricarica DC non sono modificabili.
+// Consumi per tipo di strada in kWh/100 km.
+const VEHICLE = {
+  label: 'Jaecoo 7 PHEV',
   batteryKwh: 18,
   maxDcKw: 40,
+  rates: { motorway: 20, expressway: 14, urban: 14 },
+};
+const DEFAULTS = {
   startPct: 90,
   petrolMotorway: 18, // L/100 km
   petrolExpressway: 20,
@@ -101,14 +91,6 @@ function fillForm() {
     $(field).value = saved[field] ?? DEFAULTS[field] ?? '';
   }
   // Prima apertura o impostazioni di una versione precedente: batteria e potenza tornano al modello.
-  if (saved.version !== SETTINGS_VERSION) applyVehicle(saved.vehicle ?? DEFAULTS.vehicle);
-}
-
-function applyVehicle(key) {
-  const vehicle = VEHICLES[key] ?? VEHICLES[DEFAULTS.vehicle];
-  $('vehicle').value = key in VEHICLES ? key : DEFAULTS.vehicle;
-  $('batteryKwh').value = vehicle.batteryKwh;
-  $('maxDcKw').value = vehicle.maxDcKw;
 }
 
 function setStatus(text, isError = false) {
@@ -212,10 +194,7 @@ async function fetchTraffic(from, to, key) {
 // Parametri del pianificatore a partire dal form (campi salvati come stringhe).
 function planParams(form, startPct) {
   return {
-    vehicle: {
-      batteryKwh: Number(form.batteryKwh),
-      maxDcKw: Number(form.maxDcKw),
-    },
+    vehicle: { batteryKwh: VEHICLE.batteryKwh, maxDcKw: VEHICLE.maxDcKw },
     conditions: { tempC: Number(form.tempC) },
     startPct,
     chargeToPct: Number(form.chargeToPct),
@@ -247,7 +226,7 @@ async function routeData(from, to) {
 // hybrid (motore acceso, batteria mantenuta al 60%).
 const HYBRID_FLOOR_PCT = 60;
 async function planWith(route, form, startPct, { nearestFirst = false, learnedFactor = 1, mode = 'auto' } = {}) {
-  const rates = (VEHICLES[form.vehicle] ?? VEHICLES[DEFAULTS.vehicle]).rates;
+  const rates = VEHICLE.rates;
   const totalKm = route.cum.at(-1);
   const profile = buildProfile(route.steps, {
     totalKm,
@@ -445,7 +424,7 @@ function formatDistance(km) {
 async function onSubmit(event) {
   event.preventDefault();
   const form = Object.fromEntries(FIELDS.map((f) => [f, $(f).value]));
-  saveSettings({ ...form, version: SETTINGS_VERSION });
+  saveSettings(form);
 
   const button = $('plan');
   button.disabled = true;
@@ -493,7 +472,7 @@ function setNavWarn(text) {
 
 // Percentuale di batteria consumata tra due km del percorso, con il profilo del viaggio corrente.
 function pctBetween(a, b) {
-  return (energyBetween(trip.profile, a, b) / Number(trip.form.batteryKwh)) * 100;
+  return (energyBetween(trip.profile, a, b) / VEHICLE.batteryKwh) * 100;
 }
 
 async function keepScreenOn() {
@@ -636,7 +615,7 @@ function learnFromReading(pct) {
   if (!anchor || nav.km === null) return;
   const travelled = nav.km - anchor.km;
   if (travelled < LEARN_MIN_KM) return;
-  const measuredKwh = ((anchor.pct - pct) / 100) * Number(trip.form.batteryKwh);
+  const measuredKwh = ((anchor.pct - pct) / 100) * VEHICLE.batteryKwh;
   const predictedKwh = energyBetween(trip.profile, anchor.km, nav.km);
   if (measuredKwh <= 0 || predictedKwh < LEARN_MIN_KWH) return;
   const ratio = Math.min(1.8, Math.max(0.5, measuredKwh / predictedKwh));
@@ -734,9 +713,9 @@ function updateTurn(step, km) {
 // Carica all'arrivo alla colonnina e tempo per arrivare al 100% con la potenza disponibile.
 function stopChargeLabel(arrivalPct, kw) {
   const arrival = Math.max(0, arrivalPct);
-  const avgKw = Math.min(Number(trip.form.maxDcKw), kw) * MODEL.averageChargeFactor;
+  const avgKw = Math.min(VEHICLE.maxDcKw, kw) * MODEL.averageChargeFactor;
   if (!(avgKw > 0)) return `${arrival.toFixed(0)}%`;
-  const kwh = ((100 - arrival) / 100) * Number(trip.form.batteryKwh);
+  const kwh = ((100 - arrival) / 100) * VEHICLE.batteryKwh;
   const minutes = (kwh / MODEL.chargeEfficiency / avgKw) * 60;
   return `${arrival.toFixed(0)}% · 100% in ${formatMinutes(minutes)}`;
 }
@@ -1028,7 +1007,7 @@ function batteryKwhFromCurrent(samples) {
 function tripSummary(rec) {
   const first = rec.samples[0];
   const last = rec.samples.at(-1);
-  const batteryKwh = Number(trip.form.batteryKwh);
+  const batteryKwh = VEHICLE.batteryKwh;
   const odoKm = first.odo != null && last.odo != null ? last.odo - first.odo : null;
   const km = odoKm ?? last.km - first.km;
   const litres = first.fuelL != null && last.fuelL != null ? first.fuelL - last.fuelL : 0;
@@ -1118,5 +1097,4 @@ $('startNav').addEventListener('click', startNavigation);
 $('recalc').addEventListener('click', () => recalculate());
 $('stopNav').addEventListener('click', stopNavigation);
 $('recenter').addEventListener('click', toggleFollow);
-$('vehicle').addEventListener('change', () => applyVehicle($('vehicle').value));
 window.addEventListener('resize', () => layoutMap());
