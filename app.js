@@ -309,22 +309,26 @@ map.on('load', () => {
     source: ROUTE_SOURCE,
     paint: { 'line-color': '#0a7d4f', 'line-width': 6 },
   });
+  routeReady = true; // il percorso si disegna anche se il livello degli edifici non c'è
   // edifici in 3D: visibili solo nella vista inclinata
-  map.addLayer({
-    id: 'buildings-3d',
-    type: 'fill-extrusion',
-    source: 'openmaptiles',
-    'source-layer': 'building',
-    minzoom: 14,
-    layout: { visibility: 'none' },
-    paint: {
-      'fill-extrusion-color': '#d6d2c8',
-      'fill-extrusion-height': ['get', 'render_height'],
-      'fill-extrusion-base': ['get', 'render_min_height'],
-      'fill-extrusion-opacity': 0.85,
-    },
-  });
-  routeReady = true;
+  try {
+    map.addLayer({
+      id: 'buildings-3d',
+      type: 'fill-extrusion',
+      source: 'openmaptiles',
+      'source-layer': 'building',
+      minzoom: 14,
+      layout: { visibility: 'none' },
+      paint: {
+        'fill-extrusion-color': '#d6d2c8',
+        'fill-extrusion-height': ['get', 'render_height'],
+        'fill-extrusion-base': ['get', 'render_min_height'],
+        'fill-extrusion-opacity': 0.85,
+      },
+    });
+  } catch (err) {
+    console.warn('Edifici 3D non disponibili:', err.message);
+  }
   if (trip) renderMap(trip.points, trip.result.stops);
 });
 
