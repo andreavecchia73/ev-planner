@@ -22,6 +22,9 @@ object TripLog {
     private const val REFRESH_WAIT_MS = 45_000L // tempo perché l'auto risponda al pulsante di aggiornamento
     private const val MIN_TRIP_KM = 0.1
     private const val ODOMETER_TOLERANCE_KM = 0.5 // l'odometro è in km interi
+    private const val BATTERY_KWH = 18.0 // capacità della batteria della Jaecoo7
+    // Corrente negativa = energia che entra nella batteria (ipotesi da verificare sul primo viaggio con motore acceso)
+    private const val CHARGING_CURRENT_A = -5.0
 
     private const val REFRESH_BUTTON = "button.chery_connect_refresh_full_status"
 
@@ -30,7 +33,7 @@ object TripLog {
         "sensor.chery_connect_odometer" to "odometer",
         "sensor.chery_connect_fuel_remaining" to "fuel",
         "sensor.chery_connect_hybrid_mileage" to "hybridKm",
-        "sensor.chery_connect_hv_battery_voltage" to "voltage",
+        "sensor.chery_connect_battery" to "soc",
         "sensor.chery_connect_hv_battery_current" to "current",
         "binary_sensor.chery_connect_engine" to "engine",
         "binary_sensor.chery_connect_high_voltage_active" to "hv",
@@ -42,7 +45,6 @@ object TripLog {
     private class Snap(val ms: Long, val values: Map<String, String>) {
         fun num(key: String): Double? = values[key]?.toDoubleOrNull()
         val moving: Boolean get() = values["engine"] == "on" || values["hv"] == "on"
-        val powerKw: Double get() = (num("voltage") ?: 0.0) * abs(num("current") ?: 0.0) / 1000
     }
 
     // Sincronizza i viaggi: l'aggiornamento serve solo a recuperare i viaggi fatti con l'app chiusa.
@@ -97,13 +99,14 @@ object TripLog {
         return events.sortedBy { it.ms }
     }
 
-    // Scorre la storia in ordine temporale e ricostruisce i viaggi.
+    // Scorre la storia in ordine temporale e ricostruisce i viaggi. Il consumo elettrico è la differenza
+    // di carica della batteria (%) × capacità: la corrente serve solo a riconoscere la ricarica dal motore.
     private fun detect(events: List<Event>): List<JSONObject> {
         val trips = mutableListOf<JSONObject>()
         val values = HashMap<String, String>()
         var start: Snap? = null
         var prev: Snap? = null
-        var kwh = 0.0
+        var engineChargePct = 0.0
         var litres = 0.0
         var refuelled = false
 
@@ -112,22 +115,29 @@ object TripLog {
             val snap = Snap(e.ms, values.toMap())
             val p = prev
             if (start != null && p != null) {
-                // energia e carburante tra due letture consecutive, con il valore della lettura precedente
-                kwh += p.powerKw * (snap.ms - p.ms) / 3_600_000.0
-                val before = p.num("fuel")
-                val now = snap.num("fuel")
-                if (before != null && now != null) {
-                    if (now < before) litres += before - now
-                    if (now > before + 3.0) refuelled = true // rifornimento: il calo misurato non basta più
+                // ricarica dal motore: motore acceso, corrente di carica e batteria che sale nell'intervallo
+                val socBefore = p.num("soc")
+                val socNow = snap.num("soc")
+                if (socBefore != null && socNow != null && p.values["engine"] == "on" &&
+                    (p.num("current") ?: 0.0) < CHARGING_CURRENT_A && socNow > socBefore
+                ) {
+                    engineChargePct += socNow - socBefore
+                }
+                // carburante: solo i cali contano come consumo, gli aumenti sono rifornimenti
+                val fuelBefore = p.num("fuel")
+                val fuelNow = snap.num("fuel")
+                if (fuelBefore != null && fuelNow != null) {
+                    if (fuelNow < fuelBefore) litres += fuelBefore - fuelNow
+                    if (fuelNow > fuelBefore + 3.0) refuelled = true
                 }
             }
             if (start == null && snap.moving) {
                 start = snap
-                kwh = 0.0
+                engineChargePct = 0.0
                 litres = 0.0
                 refuelled = false
             } else if (start != null && !snap.moving) {
-                buildTrip(start, snap, kwh, litres, refuelled)?.let { trips.add(it) }
+                buildTrip(start, snap, engineChargePct, litres, refuelled)?.let { trips.add(it) }
                 start = null
             }
             prev = snap
@@ -135,9 +145,12 @@ object TripLog {
         return trips
     }
 
-    private fun buildTrip(start: Snap, end: Snap, kwh: Double, litres: Double, refuelled: Boolean): JSONObject? {
+    private fun buildTrip(start: Snap, end: Snap, engineChargePct: Double, litres: Double, refuelled: Boolean): JSONObject? {
         val km = (end.num("odometer") ?: return null) - (start.num("odometer") ?: return null)
         if (km < MIN_TRIP_KM) return null
+        val socStart = start.num("soc") ?: return null
+        val socEnd = end.num("soc") ?: return null
+        val kwh = (socStart - socEnd) / 100 * BATTERY_KWH
         val hybridKm = ((end.num("hybridKm") ?: 0.0) - (start.num("hybridKm") ?: 0.0)).coerceIn(0.0, km)
         return JSONObject().apply {
             put("startMs", start.ms)
@@ -146,9 +159,12 @@ object TripLog {
             put("km", round(km))
             put("hybridKm", round(hybridKm))
             put("electricKm", round(max(0.0, km - hybridKm)))
-            put("litres", round(litres))
+            put("socStart", socStart)
+            put("socEnd", socEnd)
             put("kwh", round(kwh))
             put("kwhPer100Km", round(kwh / km * 100))
+            put("engineChargeKwh", round(engineChargePct / 100 * BATTERY_KWH))
+            put("litres", round(litres))
             put("litresPer100Km", if (litres > 0) round(litres / km * 100) else JSONObject.NULL)
             put("kmPerLitre", if (litres > 0) round(km / litres) else JSONObject.NULL)
             put("refuelled", refuelled)
