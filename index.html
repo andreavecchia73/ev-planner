@@ -22,6 +22,15 @@
         <legend>Viaggio</legend>
         <label>Partenza <input id="from" required placeholder="Es. Brescia, Italia" /></label>
         <label>Arrivo <input id="to" required placeholder="Es. Torino, Italia" /></label>
+        <label>Tappe intermedie (una per riga, facoltative)
+          <textarea id="via" rows="3" placeholder="Es. Piacenza, Italia"></textarea>
+        </label>
+        <label>Percorso
+          <select id="tripType">
+            <option value="oneway">Solo andata</option>
+            <option value="roundtrip">Andata e ritorno</option>
+          </select>
+        </label>
       </fieldset>
 
       <fieldset>

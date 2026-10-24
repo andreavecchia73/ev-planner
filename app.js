@@ -21,7 +21,7 @@ import {
 
 const STORAGE_KEY = 'ev-planner-settings';
 const FIELDS = [
-  'from', 'to', 'startPct', 'chargeToPct', 'kplMotorway',
+  'from', 'to', 'via', 'tripType', 'startPct', 'chargeToPct', 'kplMotorway',
   'kplExpressway', 'kplUrban', 'petrolPrice',
   'reservePct', 'tempC', 'evdcPrice', 'ocmKey', 'tomtomKey', 'haUrl', 'haEntity', 'haToken',
   'sheetUrl', 'sheetSecret', 'strategy',
@@ -42,6 +42,7 @@ const DEFAULTS = {
   kplUrban: 25,
   petrolPrice: 2, // €/L, modificabile
   strategy: 'auto',
+  tripType: 'oneway',
   chargeToPct: 80,
   reservePct: 5,
   tempC: 15,
@@ -110,8 +111,10 @@ async function geocode(query) {
   return { lat: Number(data[0].lat), lon: Number(data[0].lon) };
 }
 
-async function fetchRoute(a, b) {
-  const url = `https://router.project-osrm.org/route/v1/driving/${a.lon},${a.lat};${b.lon},${b.lat}?overview=full&geometries=geojson&steps=true`;
+// waypoints: partenza, tappe intermedie e arrivo, nell'ordine di marcia.
+async function fetchRoute(waypoints) {
+  const coords = waypoints.map((p) => `${p.lon},${p.lat}`).join(';');
+  const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=true`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Percorso fallito (HTTP ${res.status})`);
   const data = await res.json();
@@ -120,7 +123,13 @@ async function fetchRoute(a, b) {
   return {
     points: route.geometry.coordinates.map(([lon, lat]) => ({ lat, lon })),
     steps: route.legs.flatMap((leg) => leg.steps),
+    legKm: route.legs.map((leg) => leg.distance / 1000),
   };
+}
+
+// Tappe intermedie scritte nel form, una per riga.
+function viaPlaces(form) {
+  return form.via.split('\n').map((s) => s.trim()).filter(Boolean);
 }
 
 // Altitudini campionate ogni ALTITUDE_STEP_KM. Se il servizio non risponde il calcolo prosegue in piano.
@@ -216,11 +225,13 @@ function planParams(form, startPct) {
 }
 
 // Dati del percorso (geometria, passi, altimetria): una sola richiesta per confrontare le strategie.
-async function routeData(from, to) {
-  const { points, steps } = await fetchRoute(from, to);
+async function routeData(waypoints) {
+  const { points, steps, legKm } = await fetchRoute(waypoints);
   const cum = cumulativeKm(points);
   const altitudeAt = await fetchAltitudeAt(points, cum);
-  return { points, steps, cum, altitudeAt };
+  // km sul percorso di ogni tappa (partenza inclusa), per sapere quali tappe restano da fare
+  const waypointKm = legKm.reduce((km, leg) => [...km, km.at(-1) + leg], [0]);
+  return { points, steps, cum, altitudeAt, waypointKm };
 }
 
 // Piano per modalità: auto (ricarica se conviene), petrol20 (benzina dal 20%), electric (ricarica sempre),
@@ -281,12 +292,13 @@ async function decideStrategy(route, form, startPct, opts = {}) {
 }
 
 // Percorso da un punto a un altro, con la strategia scelta: profilo, soste, costi.
-async function planRoute(from, to, form, startPct, opts = {}) {
-  const route = await routeData(from, to);
+async function planRoute(waypoints, form, startPct, opts = {}) {
+  const route = await routeData(waypoints);
   const decided = await decideStrategy(route, form, startPct, opts);
   return {
     points: route.points,
     cum: route.cum,
+    waypointKm: route.waypointKm,
     steps: routeSteps(route.steps),
     profile: decided.profile,
     result: { ...decided.result, strategy: decided.strategy, costs: decided.costs },
@@ -456,13 +468,21 @@ async function onSubmit(event) {
   setStatus('Calcolo in corso…');
 
   try {
-    const from = await geocode(form.from);
-    await sleep(1100); // Nominatim: massimo una richiesta al secondo
-    const to = await geocode(form.to);
-    const planned = await planRoute(from, to, form, Number(form.startPct));
-    const traffic = await fetchTraffic(from, to, form.tomtomKey.trim()).catch(() => null);
+    // partenza, tappe, arrivo; con l'andata e ritorno si torna per le stesse tappe in ordine inverso
+    const places = [form.from, ...viaPlaces(form), form.to];
+    const stops = [];
+    for (const [i, place] of places.entries()) {
+      if (i > 0) await sleep(1100); // Nominatim: massimo una richiesta al secondo
+      stops.push(await geocode(place));
+    }
+    const waypoints = form.tripType === 'roundtrip'
+      ? [...stops, ...stops.slice(1, -1).reverse(), stops[0]]
+      : stops;
+    const planned = await planRoute(waypoints, form, Number(form.startPct));
+    // il traffico riguarda il primo tratto: dalla partenza alla prima tappa
+    const traffic = await fetchTraffic(waypoints[0], waypoints[1], form.tomtomKey.trim()).catch(() => null);
 
-    trip = { ...planned, destination: to, form, traffic };
+    trip = { ...planned, destination: waypoints.at(-1), waypoints, form, traffic };
     renderResult(planned.result, traffic);
     renderMap(planned.points, planned.result.stops);
     $('startNav').hidden = false;
@@ -750,7 +770,7 @@ function refreshTraffic() {
   if (!key || !nav.lastFix || nav.trafficBusy || Date.now() - nav.trafficAt < TRAFFIC_REFRESH_MS) return;
   nav.trafficBusy = true;
   nav.trafficAt = Date.now();
-  fetchTraffic(nav.lastFix, trip.destination, key)
+  fetchTraffic(nav.lastFix, nextStop(), key)
     .then((traffic) => {
       if (nav) nav.traffic = traffic;
     })
@@ -845,6 +865,19 @@ function onGpsError(err) {
   setNavWarn(text);
 }
 
+// Tappe intermedie non ancora superate, in ordine di marcia.
+function remainingVia() {
+  const currentKm = trip.cum[nav.hint] ?? 0;
+  return trip.waypoints.slice(1, -1).filter((_, k) => trip.waypointKm[k + 1] > currentKm);
+}
+
+// Prossima tappa (intermedia o arrivo) per il traffico.
+function nextStop() {
+  const currentKm = trip.cum[nav.hint] ?? 0;
+  const i = trip.waypoints.findIndex((_, k) => k > 0 && trip.waypointKm[k] > currentKm);
+  return i === -1 ? trip.destination : trip.waypoints[i];
+}
+
 // Ricalcolo dalla posizione attuale con la carica riallineata. Con nearestFirst sceglie la sosta più vicina.
 async function recalculate({ nearestFirst = false } = {}) {
   if (!nav?.lastFix) {
@@ -857,12 +890,14 @@ async function recalculate({ nearestFirst = false } = {}) {
   const pct = Math.max(0, Math.round(nav.soc));
   setNavWarn(nearestFirst ? 'Carica sotto la scorta: cerco la sosta più vicina…' : 'Ricalcolo del piano di viaggio…');
   try {
-    const planned = await planRoute(nav.lastFix, trip.destination, trip.form, pct, {
+    // dalla posizione attuale: solo le tappe intermedie ancora da raggiungere
+    const waypoints = [nav.lastFix, ...remainingVia(), trip.destination];
+    const planned = await planRoute(waypoints, trip.form, pct, {
       nearestFirst,
       learnedFactor: nav.learnedFactor,
     });
     if (!nav) return; // navigazione terminata durante il calcolo
-    trip = { ...planned, destination: trip.destination, form: trip.form };
+    trip = { ...planned, destination: trip.destination, waypoints, form: trip.form };
     nav.hint = 0;
     nav.km = 0;
     nav.soc = pct;
