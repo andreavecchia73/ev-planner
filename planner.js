@@ -224,6 +224,7 @@ export async function planTrip({
   maxOffRouteKm = 5, // distanza massima della colonnina dal percorso
   maxStops = 15,
   fuel = null,
+  noCharging = false, // nessuna sosta: tutto il viaggio con la batteria fino al 20%, poi benzina
 }) {
   const cum = cumulativeKm(points);
   const totalKm = cum[cum.length - 1];
@@ -267,7 +268,7 @@ export async function planTrip({
   let pos = 0;
   let soc = startPct;
 
-  while (reachFloor(pos, soc) < totalKm) {
+  while (!noCharging && reachFloor(pos, soc) < totalKm) {
     if (stops.length >= maxStops) {
       throw new Error(`Servono più di ${maxStops} soste: controlla i parametri del veicolo`);
     }

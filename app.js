@@ -233,23 +233,63 @@ function planParams(form, startPct) {
   };
 }
 
-// Percorso da un punto a un altro: profilo di consumo per tipo di strada e dislivello, soste di ricarica.
-async function planRoute(from, to, form, startPct, { nearestFirst = false, learnedFactor = 1 } = {}) {
+// Dati del percorso (geometria, passi, altimetria): una sola richiesta per confrontare le strategie.
+async function routeData(from, to) {
   const { points, steps } = await fetchRoute(from, to);
   const cum = cumulativeKm(points);
-  const totalKm = cum.at(-1);
   const altitudeAt = await fetchAltitudeAt(points, cum);
+  return { points, steps, cum, altitudeAt };
+}
+
+// Piano con soste (noCharging: solo batteria fino al 20%, poi benzina).
+async function planWith(route, form, startPct, { nearestFirst = false, learnedFactor = 1, noCharging = false } = {}) {
   const rates = (VEHICLES[form.vehicle] ?? VEHICLES[DEFAULTS.vehicle]).rates;
-  const profile = buildProfile(steps, { totalKm, tempC: Number(form.tempC), altitudeAt, rates, learnedFactor });
-  const result = await planTrip({ points, profile, nearestFirst, ...planParams(form, startPct) });
-  return {
-    points,
-    cum,
-    steps: routeSteps(steps),
+  const totalKm = route.cum.at(-1);
+  const profile = buildProfile(route.steps, {
+    totalKm,
+    tempC: Number(form.tempC),
+    altitudeAt: route.altitudeAt,
+    rates,
+    learnedFactor,
+  });
+  const result = await planTrip({
+    points: route.points,
     profile,
-    result,
+    nearestFirst,
+    noCharging,
+    ...planParams(form, startPct),
+  });
+  return { result, profile };
+}
+
+// Scelta prima della pianificazione: elettrico con le soste oppure benzina dal 20%. Vince il costo totale più basso.
+async function decideStrategy(route, form, startPct, opts = {}) {
+  const electric = await planWith(route, form, startPct, opts);
+  // ricarica di emergenza (scorta): si usano comunque le colonnine
+  if (opts.nearestFirst) return { ...electric, strategy: 'elettrico', costs: null };
+  const petrol = await planWith(route, form, startPct, { ...opts, noCharging: true });
+  const unknownPrice = electric.result.stops.some((st) => st.priceEurKwh === null);
+  const electricCost = electric.result.totalCostEur;
+  const petrolCost = petrol.result.totalCostEur;
+  const useElectric = unknownPrice || electricCost <= petrolCost;
+  const costs = { electric: electricCost, petrol: petrolCost };
+  return useElectric
+    ? { ...electric, strategy: 'elettrico', costs }
+    : { ...petrol, strategy: 'benzina dal 20%', costs };
+}
+
+// Percorso da un punto a un altro, con la strategia scelta: profilo, soste, costi.
+async function planRoute(from, to, form, startPct, opts = {}) {
+  const route = await routeData(from, to);
+  const decided = await decideStrategy(route, form, startPct, opts);
+  return {
+    points: route.points,
+    cum: route.cum,
+    steps: routeSteps(route.steps),
+    profile: decided.profile,
+    result: { ...decided.result, strategy: decided.strategy, costs: decided.costs },
     startPct,
-    altitudeFound: altitudeAt !== null,
+    altitudeFound: route.altitudeAt !== null,
   };
 }
 
@@ -332,6 +372,7 @@ function renderResult(result, traffic = null) {
     ['Tempo di ricarica', formatMinutes(result.chargeMinutes)],
     ['Costo ricarica', chargeCostLabel(result)],
     ['Costo totale', `${result.totalCostEur.toFixed(2)} €`],
+    ['Scelta', result.costs ? `${result.strategy} (elettrico ${result.costs.electric.toFixed(2)} €, benzina ${result.costs.petrol.toFixed(2)} €)` : result.strategy],
     ...(result.petrol ? [['Benzina', `${result.petrol.litres.toFixed(1)} L da km ${result.petrol.fromKm.toFixed(0)} · ${result.petrol.cost.toFixed(2)} €`]] : []),
     ...(traffic ? [['Ritardo traffico', `+${Math.round(traffic.delayMin)} min`]] : []),
     ['Tempo totale', formatMinutes(result.totalMinutes)],
@@ -357,6 +398,7 @@ function renderResult(result, traffic = null) {
       `${stop.name} · km ${stop.km.toFixed(0)} · ${stop.kw} kW · ` +
       `arrivo ${stop.arrivalPct.toFixed(0)}% → ${stop.departPct.toFixed(0)}% · ` +
       `${Math.round(stop.chargeMinutes)} min` +
+      (stop.priceEurKwh == null ? '' : ` · ${stop.priceEurKwh.toFixed(2)} €/kWh`) +
       (stopCost(stop) === null ? '' : ` · ${stopCost(stop).toFixed(2)} €`);
     list.append(li);
   }
@@ -923,6 +965,7 @@ function toggleFollow() {
 function startRecord() {
   return {
     startedAt: new Date().toISOString(),
+    strategy: trip.result.strategy,
     from: trip.form.from,
     to: trip.form.to,
     plannedKwh100: trip.result.consumptionKwhPerKm * 100,
@@ -1003,6 +1046,7 @@ function tripSummary(rec) {
     soste: rec.stops,
     'costo ricarica €': rec.chargeCostEur != null ? round(rec.chargeCostEur, 2) : '',
     'batteria kWh': batteryKwh,
+    strategia: rec.strategy,
   };
 }
 
