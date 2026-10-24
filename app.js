@@ -272,10 +272,12 @@ async function decideStrategy(route, form, startPct, opts = {}) {
   const costs = { electric: electricCost, petrol: petrolCost };
   // nessuna colonnina utile: l'elettrico si ferma al 20% e il resto è a benzina
   const noStops = electric.result.stops.length === 0 && electric.result.petrol !== null;
-  if (noStops) return { ...petrol, strategy: 'nessuna colonnina utile: benzina dal 20%', costs };
+  // il conteggio delle colonnine viene dall'alternativa elettrica, sempre calcolata
+  const diagnostics = electric.result.diagnostics;
+  if (noStops) return { ...petrol, result: { ...petrol.result, diagnostics }, strategy: 'nessuna colonnina utile: benzina dal 20%', costs };
   return useElectric
     ? { ...electric, strategy: 'automatica: elettrico', costs }
-    : { ...petrol, strategy: 'automatica: benzina dal 20%', costs };
+    : { ...petrol, result: { ...petrol.result, diagnostics }, strategy: 'automatica: benzina dal 20%', costs };
 }
 
 // Percorso da un punto a un altro, con la strategia scelta: profilo, soste, costi.
@@ -387,6 +389,7 @@ function renderResult(result, traffic = null) {
     ['Tempo di ricarica', formatMinutes(result.chargeMinutes)],
     ['Costo ricarica', chargeCostLabel(result)],
     ['Costo totale', `${result.totalCostEur.toFixed(2)} €`],
+    ...(result.diagnostics ? [['Colonnine', `viste ${result.diagnostics.seen} · oltre 39 kW ${result.diagnostics.powerOk} · entro ${result.diagnostics.maxOffRouteKm} km ${result.diagnostics.nearRoute} · utili ${result.diagnostics.reachable}`]] : []),
     ['Scelta', result.costs ? `${result.strategy} (elettrico ${result.costs.electric.toFixed(2)} €, benzina ${result.costs.petrol.toFixed(2)} €)` : result.strategy],
     ...(result.petrol ? [['Benzina', `${result.petrol.litres.toFixed(1)} L da km ${result.petrol.fromKm.toFixed(0)} · ${result.petrol.cost.toFixed(2)} €`]] : []),
     ...(traffic ? [['Ritardo traffico', `+${Math.round(traffic.delayMin)} min`]] : []),

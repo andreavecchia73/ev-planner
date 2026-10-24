@@ -265,6 +265,22 @@ export async function planTrip({
     return evEur <= petrolEur;
   };
 
+  // conteggio delle colonnine trovate, per capire perché non ne vengono scelte
+  const countCandidates = (list, pos, reachKm) => {
+    const counts = { seen: list.length, powerOk: 0, nearRoute: 0, reachable: 0 };
+    for (const c of list) {
+      const idx = nearestIndex(points, c);
+      const km = cum[idx];
+      const off = haversineKm(points[idx], c);
+      const powerOk = (c.kw ?? 0) > MODEL.minChargerKw;
+      if (powerOk) counts.powerOk++;
+      if (off <= maxOffRouteKm) counts.nearRoute++;
+      if (powerOk && off <= maxOffRouteKm && km > pos && km <= reachKm) counts.reachable++;
+    }
+    return counts;
+  };
+  let diagnostics = null;
+
   const stops = [];
   let pos = 0;
   let soc = startPct;
@@ -286,6 +302,7 @@ export async function planTrip({
 
     const near = await findChargers(at, 25);
     const list = near.length ? near : await findChargers(at, 60);
+    if (!diagnostics) diagnostics = { ...countCandidates(list, pos, floorKm), maxOffRouteKm };
     let candidates = pick(list, pos, soc, floorKm);
     if (!candidates.length && !fuel) candidates = pick(list, pos, soc, reserveKm);
     if (!candidates.length && !fuel) {
@@ -347,6 +364,7 @@ export async function planTrip({
     petrol,
     chargeCostEur,
     totalCostEur: chargeCostEur + (petrol?.cost ?? 0),
+    diagnostics,
   };
 }
 
