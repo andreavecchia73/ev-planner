@@ -155,8 +155,11 @@ object TripLog {
         var litres = 0.0
         var refuelled = false
 
-        for (e in events) {
+        for (i in events.indices) {
+            val e = events[i]
             values[e.key] = e.state
+            // letture allo stesso istante: si applicano tutte prima di creare lo stato
+            if (i + 1 < events.size && events[i + 1].ms == e.ms) continue
             val snap = Snap(e.ms, values.toMap())
             val p = prev
             if (p != null) {
