@@ -73,7 +73,6 @@ class MainActivity : ComponentActivity() {
             pushBatteryToPlanner()
         }
         handler.post(batteryPoll)
-        TripWorker.schedule(this)
     }
 
     override fun onDestroy() {
